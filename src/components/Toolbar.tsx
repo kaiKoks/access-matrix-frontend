@@ -1,21 +1,22 @@
 import React, { useRef } from 'react';
-import { useMatrixStore } from '@/store/useMatrixStore';
-import { parseExcelMatrix } from '@/services/excelParser';
-import { Upload, Play, Search, Layers } from 'lucide-react';
+import { useMatrixStore } from '../store/useMatrixStore';
+import { parseExcelMatrix } from '../services/excelParser';
+import { exportMatrixToExcel } from '../services/networkTester';
+import { Upload, Play, Search, Layers, Download } from 'lucide-react';
 
 export const Toolbar: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { 
-    sheets, 
-    activeSheetIndex, 
-    searchQuery, 
-    statusFilter, 
+  const {
+    sheets,
+    activeSheetIndex,
+    searchQuery,
+    statusFilter,
     isBatchChecking,
-    setSheets, 
-    setActiveSheetIndex, 
-    setSearchQuery, 
-    setStatusFilter, 
-    checkAllTestableRows 
+    setSheets,
+    setActiveSheetIndex,
+    setSearchQuery,
+    setStatusFilter,
+    checkAllTestableRows,
   } = useMatrixStore();
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -34,13 +35,13 @@ export const Toolbar: React.FC = () => {
 
   return (
     <div className="bg-zinc-900 border-b border-zinc-800 px-6 py-4 flex flex-col md:flex-row gap-4 items-center justify-between">
-      <div className="flex items-center gap-3 w-full md:w-auto">
-        <input 
-          type="file" 
-          ref={fileInputRef} 
-          onChange={handleFileUpload} 
-          accept=".xlsx, .xls" 
-          className="hidden" 
+      <div className="flex items-center gap-3 w-full md:w-auto flex-wrap">
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileUpload}
+          accept=".xlsx, .xls"
+          className="hidden"
         />
         <button
           onClick={() => fileInputRef.current?.click()}
@@ -58,7 +59,9 @@ export const Toolbar: React.FC = () => {
                 key={s.sheetName}
                 onClick={() => setActiveSheetIndex(idx)}
                 className={`px-3 py-1 rounded-md text-xs font-medium transition ${
-                  activeSheetIndex === idx ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-zinc-200'
+                  activeSheetIndex === idx
+                    ? 'bg-blue-600 text-white'
+                    : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
                 {s.sheetName}
@@ -69,9 +72,9 @@ export const Toolbar: React.FC = () => {
       </div>
 
       {activeSheet && (
-        <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+        <div className="flex items-center gap-3 w-full md:w-auto justify-end flex-wrap">
           <div className="relative">
-            <Search className="w-4 h-4 absolute left-3 top-2.5 text-zinc-500" />
+            <Search className="w-4 h-4 absolute left-3 top-2 text-zinc-500" />
             <input
               type="text"
               placeholder="Поиск по IP / порту / роли..."
@@ -88,10 +91,19 @@ export const Toolbar: React.FC = () => {
           >
             <option value="all">Все статусы</option>
             <option value="accessible">Доступен</option>
+            <option value="partial">Частично доступен</option>
             <option value="blocked">Закрыт</option>
             <option value="untestable">Недоступно</option>
             <option value="idle">Не проверен</option>
           </select>
+
+          <button
+            onClick={() => exportMatrixToExcel(activeSheet)}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium border border-zinc-700 transition"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Экспорт (.xlsx)
+          </button>
 
           <button
             disabled={isBatchChecking || activeSheet.stats.testableRows === 0}
@@ -99,7 +111,9 @@ export const Toolbar: React.FC = () => {
             className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
           >
             <Play className="w-3.5 h-3.5 fill-current" />
-            {isBatchChecking ? 'Проверка...' : `Проверить всё (${activeSheet.stats.testableRows})`}
+            {isBatchChecking
+              ? 'Проверка...'
+              : `Проверить всё (${activeSheet.stats.testableRows})`}
           </button>
         </div>
       )}

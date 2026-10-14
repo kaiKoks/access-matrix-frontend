@@ -1,22 +1,27 @@
 import React from 'react';
-import { useMatrixStore } from '@/store/useMatrixStore';
-import { StatusBadge } from '@/components/StatusBadge';
-import { X, Play, Terminal } from 'lucide-react';
+import { useMatrixStore } from '../store/useMatrixStore';
+import { StatusBadge } from './StatusBadge';
+import { X, Play, Terminal, CheckCircle2, XCircle } from 'lucide-react';
 
 export const RowDetailDrawer: React.FC = () => {
-  const { selectedRow, setSelectedRow, checkSingleRow } = useMatrixStore();
+  const { sheets, activeSheetIndex, selectedRowId, setSelectedRowId, checkSingleRow } = useMatrixStore();
+
+  const activeSheet = sheets[activeSheetIndex];
+  const selectedRow = activeSheet?.rows.find((r) => r.__id === selectedRowId) || null;
 
   if (!selectedRow) return null;
 
   return (
-    <div className="fixed inset-y-0 right-0 w-96 bg-zinc-900 border-l border-zinc-800 shadow-2xl z-50 flex flex-col p-6 animate-in slide-in-from-right duration-200">
+    <div className="fixed inset-y-0 right-0 w-96 bg-zinc-900 border-l border-zinc-800 shadow-2xl z-50 flex flex-col p-6">
       <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
         <div>
           <h3 className="font-semibold text-zinc-100">Правило доступа #{selectedRow.__rowNumber}</h3>
-          <p className="text-xs text-zinc-400 mt-0.5">Диагностика сетевого правила</p>
+          <p className="text-xs text-zinc-400 mt-0.5">
+            {selectedRow.__sectionTitle || 'Диагностика сетевого правила'}
+          </p>
         </div>
-        <button 
-          onClick={() => setSelectedRow(null)}
+        <button
+          onClick={() => setSelectedRowId(null)}
           className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 transition"
         >
           <X className="w-5 h-5" />
@@ -27,7 +32,7 @@ export const RowDetailDrawer: React.FC = () => {
         <div>
           <label className="text-xs text-zinc-400 uppercase tracking-wider font-medium">Статус</label>
           <div className="mt-1.5 flex items-center gap-3">
-            <StatusBadge status={selectedRow.checkStatus} />
+            <StatusBadge status={selectedRow.checkStatus} reason={selectedRow.meta.untestableReason} />
             {selectedRow.lastCheckedAt && (
               <span className="text-xs text-zinc-500">Проверено: {selectedRow.lastCheckedAt}</span>
             )}
@@ -39,14 +44,42 @@ export const RowDetailDrawer: React.FC = () => {
           <div className="mt-2 space-y-2 bg-zinc-950 p-3 rounded-lg border border-zinc-800 font-mono text-xs">
             <div>
               <span className="text-zinc-400">Source:</span>
-              <p className="text-zinc-200 break-all">{selectedRow.meta?.sources?.join(', ') || '—'}</p>
+              <p className="text-zinc-200 break-all">{selectedRow.meta.sources.join(', ') || '—'}</p>
             </div>
             <div className="pt-2 border-t border-zinc-900">
               <span className="text-zinc-400">Destination:</span>
-              <p className="text-zinc-200 break-all">{selectedRow.meta?.destinations?.join(', ') || '—'}</p>
+              <p className="text-zinc-200 break-all">{selectedRow.meta.destinations.join(', ') || '—'}</p>
             </div>
           </div>
         </div>
+
+        {selectedRow.socketResults && selectedRow.socketResults.length > 0 && (
+          <div>
+            <label className="text-xs text-zinc-400 uppercase tracking-wider font-medium">
+              Детализация по портам
+            </label>
+            <div className="mt-2 divide-y divide-zinc-800/60 bg-zinc-950 rounded-lg border border-zinc-800 text-xs font-mono">
+              {selectedRow.socketResults.map((s, idx) => (
+                <div key={idx} className="p-2.5 flex items-center justify-between gap-2">
+                  <div className="truncate text-zinc-300" title={s.destination}>
+                    <span className="text-zinc-500">{s.protocol}</span> {s.port}
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {s.status === 'accessible' ? (
+                      <span className="text-emerald-400 flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" /> {s.latencyMs}ms
+                      </span>
+                    ) : (
+                      <span className="text-rose-400 flex items-center gap-1">
+                        <XCircle className="w-3.5 h-3.5" /> Закрыт
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div>
           <label className="text-xs text-zinc-400 uppercase tracking-wider font-medium flex items-center gap-1.5">
@@ -61,7 +94,7 @@ export const RowDetailDrawer: React.FC = () => {
 
       <div className="pt-4 border-t border-zinc-800">
         <button
-          disabled={!selectedRow.meta?.isTestable || selectedRow.checkStatus === 'checking'}
+          disabled={!selectedRow.meta.isTestable || selectedRow.checkStatus === 'checking'}
           onClick={() => checkSingleRow(selectedRow.__id)}
           className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium text-sm transition disabled:opacity-40 disabled:cursor-not-allowed"
         >
