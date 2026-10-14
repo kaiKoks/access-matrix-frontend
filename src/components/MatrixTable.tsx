@@ -74,6 +74,7 @@ export const MatrixTable: React.FC = () => {
         <thead className="bg-zinc-900/95 sticky top-0 z-10 backdrop-blur border-b border-zinc-800 text-zinc-400 font-medium">
           <tr>
             <th className="py-3 px-4 w-12 text-center">№</th>
+
             <th className="py-3 px-4 w-36">Статус доступа</th>
             {activeSheet.columns.map((col) => {
               const isSorted = sortConfig?.key === col.key;
@@ -100,7 +101,7 @@ export const MatrixTable: React.FC = () => {
             <th className="py-3 px-4 w-20 text-center">Тест</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-zinc-800/50 text-zinc-300">
+        <tbody className="divide-y divide-zinc-800/50 text-zinc-300 ">
           {processedRows.map((row, index) => {
             const isSelected = row.__id === selectedRowId;
             const prevSection = index > 0 ? processedRows[index - 1].__sectionTitle : undefined;
@@ -127,10 +128,10 @@ export const MatrixTable: React.FC = () => {
                   <td className="py-3 px-4 text-center font-mono text-zinc-500 align-top">
                     {row.__rowNumber}
                   </td>
-                  <td className="py-3 px-4 align-top">
+
+                  <td className="py-3 px-4 min-w-40 align-top">
                     <StatusBadge
                       status={row.checkStatus}
-                      reason={row.meta.untestableReason}
                     />
                   </td>
                   {activeSheet.columns.map((col) => {

@@ -18,7 +18,8 @@ export const PortCell: React.FC<PortCellProps> = ({ value, isTcp, isUdp, diction
   return (
     <div className="flex flex-wrap gap-1.5 justify-center">
       {tokens.map((port, idx) => {
-        const cleanKey = port.replace(/[^\d–-]/g, '');
+        const match = port.trim().match(/^(\d+(?:\s*[–-]\s*\d+)?)/);
+        const cleanKey = match ? match[1].replace(/\s+/g, '') : '';
         const hint = dictionary[cleanKey];
 
         return (

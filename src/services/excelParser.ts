@@ -4,19 +4,15 @@ import type { DynamicMatrixRow, DetectedColumn, ParsedMatrixSheet, ParsedNetwork
 const DEFAULT_PORT_DICTIONARY: Record<string, string> = {
   '53': 'DNS',
   '88': 'Kerberos',
-  '135': 'RPC Endpoint Mapper',
+  '135': 'RPC',
   '389': 'LDAP',
   '445': 'SMB',
-  '464': 'Kerberos Change/Set password',
+  '464': 'Kerberos Auth',
   '500': 'IPsec ISAKMP',
   '636': 'LDAPS',
   '3268': 'LDAP GC',
   '3269': 'LDAP GC SSL',
   '4500': 'NAT-T',
-  '9443': 'HTTPS API (Сбербанк)',
-  '13000': 'Kaspersky Security Center (SSL)',
-  '14000': 'Kaspersky Security Center (Open)',
-  '15000': 'Агент администрирования KSC (UDP)',
 };
 
 const SEMANTIC_PATTERNS: [DetectedColumn['semanticRole'], RegExp][] = [
@@ -62,13 +58,29 @@ export async function parseExcelMatrix(file: File): Promise<ParsedMatrixSheet[]>
   const matrixSheetNames: string[] = [];
 
   // 1. Сначала ищем листы со справочником портов ("Расшифровка портов")
-  for (const name of workbook.SheetNames) {
+for (const name of workbook.SheetNames) {
     if (/расшифровка|порт|справочник/i.test(name)) {
       const rows: any[][] = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: null });
       rows.forEach(r => {
-        if (r[0] && r[1]) {
-          const portKey = String(r[0]).replace(/[^\d–-]/g, '').trim();
-          if (portKey) portDictionary[portKey] = String(r[1]).trim();
+        if (!r[0]) return;
+        const rawCell0 = String(r[0]).trim();
+        const rawCell1 = r[1] ? String(r[1]).trim() : '';
+
+        // Извлекаем только номер порта или диапазон в самом начале строки (например "1024–5000" или "464")
+        const match = rawCell0.match(/^(\d+(?:\s*[–-]\s*\d+)?)/);
+        if (!match) return;
+
+        const portKey = match[1].replace(/\s+/g, '');
+
+
+        let description = rawCell1;
+        if (!description) {
+          const bracketMatch = rawCell0.match(/\((.+?)\)/);
+          if (bracketMatch) description = bracketMatch[1].trim();
+        }
+
+        if (portKey && description) {
+          portDictionary[portKey] = description;
         }
       });
     } else {

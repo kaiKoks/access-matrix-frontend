@@ -1,5 +1,4 @@
 import React from 'react';
-import { Globe, Network, Server } from 'lucide-react';
 
 export const EndpointCell: React.FC<{ value: any }> = ({ value }) => {
   if (!value) return <span className="text-zinc-600">—</span>;
