@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { DynamicMatrixRow, DetectedColumn, ParsedMatrixSheet } from '../types/matrix';
+import type { DynamicMatrixRow, DetectedColumn, ParsedMatrixSheet, ParsedNetworkMeta} from '@/types/matrix';
 
 const DEFAULT_PORT_DICTIONARY: Record<string, string> = {
   '53': 'DNS',
@@ -236,7 +236,7 @@ export async function parseExcelMatrix(file: File): Promise<ParsedMatrixSheet[]>
           ports,
           isTestable,
           untestableReason: isExternalSource
-            ? 'Хост-источник (10.132.x.x) находится во внешнем сегменте — нет прав для запуска проверки'[cite: 1]
+            ? 'Хост-источник (10.132.x.x) находится во внешнем сегменте — нет прав для запуска проверки'
             : !ports.length
             ? 'Не указаны порты для проверки'
             : undefined,
@@ -244,7 +244,7 @@ export async function parseExcelMatrix(file: File): Promise<ParsedMatrixSheet[]>
         },
         checkStatus: isTestable ? 'idle' : 'untestable',
         checkLog: isExternalSource
-          ? 'Проверка заблокирована политикой безопасности: инициирующий узел находится вне подконтрольного домена AD.'[cite: 1]
+          ? 'Проверка заблокирована политикой безопасности: инициирующий узел находится вне подконтрольного домена AD.'
           : undefined,
       });
     }
