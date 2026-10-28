@@ -1,82 +1,80 @@
 import { create } from 'zustand';
-import type { ParsedMatrixSheet } from '../types/matrix';
-import { simulateNetworkCheck } from '../services/networkTester';
+import type { ParsedMatrixSheet, DynamicMatrixRow } from '@/types/matrix';
 
-interface MatrixState {
-  sheets: ParsedMatrixSheet[];
+interface MatrixUiState {
+  activeSystemId: string;
+  draftName: string;
+  draftSheets: ParsedMatrixSheet[];
   activeSheetIndex: number;
   selectedRowId: string | null;
   searchQuery: string;
   statusFilter: string;
-  isBatchChecking: boolean;
 
-  setSheets: (sheets: ParsedMatrixSheet[]) => void;
+  setDraftMatrix: (fileName: string, sheets: ParsedMatrixSheet[]) => void;
+  updateDraftRow: (rowId: string, updater: (r: DynamicMatrixRow) => DynamicMatrixRow) => void;
+  clearDraft: () => void;
+  selectSystem: (id: string) => void;
   setActiveSheetIndex: (idx: number) => void;
   setSelectedRowId: (id: string | null) => void;
   setSearchQuery: (query: string) => void;
   setStatusFilter: (filter: string) => void;
-  
-  checkSingleRow: (rowId: string) => Promise<void>;
-  checkAllTestableRows: () => Promise<void>;
 }
 
-export const useMatrixStore = create<MatrixState>((set, get) => ({
-  sheets: [],
+export const useMatrixStore = create<MatrixUiState>((set) => ({
+  activeSystemId: 'ALL',
+  draftName: '',
+  draftSheets: [],
   activeSheetIndex: 0,
   selectedRowId: null,
   searchQuery: '',
   statusFilter: 'all',
-  isBatchChecking: false,
 
-  setSheets: (sheets) => set({ sheets, activeSheetIndex: 0, selectedRowId: null }),
+  setDraftMatrix: (fileName, sheets) => {
+    const cleanName =
+      fileName
+        .replace(/\.xlsx?$/i, '')
+        .replace(/^Матрица доступа\s*[-–]?\s*/i, '')
+        .trim() || fileName;
+
+    const enriched = sheets.map((sh) => ({
+      ...sh,
+      rows: sh.rows.map((r) => ({
+        ...r,
+        __id: `draft_${sh.sheetName}_${r.__rowNumber}`,
+        __systemId: 'DRAFT',
+        __systemName: cleanName,
+        __sheetName: sh.sheetName,
+      })),
+    }));
+
+    set({
+      draftName: cleanName,
+      draftSheets: enriched,
+      activeSystemId: 'DRAFT',
+      activeSheetIndex: 0,
+      selectedRowId: null,
+    });
+  },
+
+  updateDraftRow: (rowId, updater) =>
+    set((state) => ({
+      draftSheets: state.draftSheets.map((sh) => ({
+        ...sh,
+        rows: sh.rows.map((r) => (r.__id === rowId ? updater(r) : r)),
+      })),
+    })),
+
+  clearDraft: () => set({ draftName: '', draftSheets: [] }),
+
+  selectSystem: (id) =>
+    set({
+      activeSystemId: id,
+      activeSheetIndex: 0,
+      selectedRowId: null,
+    }),
+
   setActiveSheetIndex: (idx) => set({ activeSheetIndex: idx, selectedRowId: null }),
   setSelectedRowId: (selectedRowId) => set({ selectedRowId }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setStatusFilter: (statusFilter) => set({ statusFilter }),
-
-  checkSingleRow: async (rowId: string) => {
-    const { sheets, activeSheetIndex } = get();
-    const currentSheet = sheets[activeSheetIndex];
-    if (!currentSheet) return;
-
-    const row = currentSheet.rows.find(r => r.__id === rowId);
-    if (!row || !row.meta.isTestable) return;
-
-    set(state => ({
-      sheets: state.sheets.map((s, idx) => idx !== state.activeSheetIndex ? s : {
-        ...s,
-        rows: s.rows.map(r => r.__id === rowId ? { ...r, checkStatus: 'checking' } : r)
-      })
-    }));
-
-    const result = await simulateNetworkCheck(row);
-
-    set(state => ({
-      sheets: state.sheets.map((s, idx) => idx !== state.activeSheetIndex ? s : {
-        ...s,
-        rows: s.rows.map(r => r.__id === rowId ? {
-          ...r,
-          checkStatus: result.status,
-          socketResults: result.socketResults,
-          checkLog: result.log,
-          lastCheckedAt: new Date().toLocaleTimeString(),
-        } : r)
-      })
-    }));
-  },
-
-  checkAllTestableRows: async () => {
-    const { sheets, activeSheetIndex, checkSingleRow } = get();
-    const currentSheet = sheets[activeSheetIndex];
-    if (!currentSheet) return;
-
-    set({ isBatchChecking: true });
-    const testable = currentSheet.rows.filter(r => r.meta.isTestable);
-
-    for (let i = 0; i < testable.length; i += 4) {
-      const batch = testable.slice(i, i + 4);
-      await Promise.all(batch.map(r => checkSingleRow(r.__id)));
-    }
-    set({ isBatchChecking: false });
-  }
 }));

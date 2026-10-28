@@ -1,5 +1,10 @@
 import * as XLSX from 'xlsx';
-import type { DynamicMatrixRow, DetectedColumn, ParsedMatrixSheet, ParsedNetworkMeta} from '@/types/matrix';
+import type {
+  DynamicMatrixRow,
+  DetectedColumn,
+  ParsedMatrixSheet,
+  ParsedNetworkMeta,
+} from '@/types/matrix';
 
 const DEFAULT_PORT_DICTIONARY: Record<string, string> = {
   '53': 'DNS',
@@ -17,25 +22,24 @@ const DEFAULT_PORT_DICTIONARY: Record<string, string> = {
 
 const SEMANTIC_PATTERNS: [DetectedColumn['semanticRole'], RegExp][] = [
   ['index', /^(№|п\/п|номер)/i],
+  ['protocol', /протокол/i],
+  ['term', /(срок|период)/i],
   ['source', /(source|сервера\/узла.*\(source\)|откуда|источник)/i],
   ['destination', /(destination|назначени|получател.*ip|куда)/i],
   ['port_udp', /\(udp\)|^udp$/i],
   ['port_tcp', /\(tcp\)|^tcp$/i],
   ['port', /порт/i],
-  ['protocol', /протокол/i],
   ['role', /(роль|сервис|наименование)/i],
 ];
 
-// Разбивает "tcp/9443" или "88, 389, 1024–5000" на массив чистых портов
 export function extractPortTokens(raw: string): string[] {
   return raw
-    .replace(/^(tcp|udp)\//gi, '')
+    .replace(/\b(tcp|udp)\s*\/?\s*/gi, '')
     .split(/[,;\n]+/)
-    .map(p => p.trim())
-    .filter(Boolean);
+    .map((p) => p.trim())
+    .filter((p) => /^\d+(\s*[–-]\s*\d+)?$/.test(p));
 }
 
-// Заполняет объединенные ячейки в сыром двумерном массиве
 function fillMergedCells(rawData: any[][], merges: XLSX.Range[] = []) {
   for (const merge of merges) {
     const val = rawData[merge.s.r]?.[merge.s.c];
@@ -53,25 +57,24 @@ function fillMergedCells(rawData: any[][], merges: XLSX.Range[] = []) {
 export async function parseExcelMatrix(file: File): Promise<ParsedMatrixSheet[]> {
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(buffer, { type: 'array' });
-  
+
   const portDictionary: Record<string, string> = { ...DEFAULT_PORT_DICTIONARY };
   const matrixSheetNames: string[] = [];
 
-  // 1. Сначала ищем листы со справочником портов ("Расшифровка портов")
-for (const name of workbook.SheetNames) {
+  for (const name of workbook.SheetNames) {
     if (/расшифровка|порт|справочник/i.test(name)) {
-      const rows: any[][] = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: null });
-      rows.forEach(r => {
+      const rows: any[][] = XLSX.utils.sheet_to_json(workbook.Sheets[name], {
+        header: 1,
+        defval: null,
+      });
+      rows.forEach((r) => {
         if (!r[0]) return;
         const rawCell0 = String(r[0]).trim();
         const rawCell1 = r[1] ? String(r[1]).trim() : '';
 
-        // Извлекаем только номер порта или диапазон в самом начале строки (например "1024–5000" или "464")
         const match = rawCell0.match(/^(\d+(?:\s*[–-]\s*\d+)?)/);
         if (!match) return;
-
         const portKey = match[1].replace(/\s+/g, '');
-
 
         let description = rawCell1;
         if (!description) {
@@ -90,7 +93,6 @@ for (const name of workbook.SheetNames) {
 
   const resultSheets: ParsedMatrixSheet[] = [];
 
-  // 2. Парсим основные листы матриц доступа
   for (const sheetName of matrixSheetNames) {
     const worksheet = workbook.Sheets[sheetName];
     const rawData: any[][] = XLSX.utils.sheet_to_json(worksheet, {
@@ -102,10 +104,9 @@ for (const name of workbook.SheetNames) {
     if (rawData.length === 0) continue;
     fillMergedCells(rawData, worksheet['!merges']);
 
-    // Ищем строку заголовков
     let headerRowIndex = 0;
     for (let i = 0; i < Math.min(10, rawData.length); i++) {
-      const rowStr = rawData[i].map(c => String(c || '').toLowerCase()).join(' ');
+      const rowStr = rawData[i].map((c) => String(c || '').toLowerCase()).join(' ');
       if ((rowStr.includes('ip') || rowStr.includes('source')) && rowStr.includes('порт')) {
         headerRowIndex = i;
         break;
@@ -114,12 +115,18 @@ for (const name of workbook.SheetNames) {
 
     const headerRow = rawData[headerRowIndex] || [];
     const subHeaderRow = rawData[headerRowIndex + 1] || [];
-    const hasSubHeader = subHeaderRow.some(c => /^(tcp|udp)$/i.test(String(c || '').trim()));
+
+    const nonEmptySubCells = subHeaderRow
+      .map((c) => String(c ?? '').trim())
+      .filter(Boolean);
+    const hasSubHeader =
+      nonEmptySubCells.length > 0 &&
+      nonEmptySubCells.every((c) => /^(tcp|udp)$/i.test(c));
 
     const columns: DetectedColumn[] = [];
     let lastMainHeader = '';
 
-    const maxCols = Math.max(headerRow.length, subHeaderRow.length);
+    const maxCols = Math.max(headerRow.length, hasSubHeader ? subHeaderRow.length : 0);
     for (let colIdx = 0; colIdx < maxCols; colIdx++) {
       const rawMain = String(headerRow[colIdx] || '').trim();
       if (rawMain) lastMainHeader = rawMain;
@@ -127,7 +134,7 @@ for (const name of workbook.SheetNames) {
       const subTitle = hasSubHeader ? String(subHeaderRow[colIdx] || '').trim() : '';
       let title = rawMain;
 
-      if (/^(tcp|udp)$/i.test(subTitle)) {
+      if (hasSubHeader && /^(tcp|udp)$/i.test(subTitle)) {
         title = `${rawMain || lastMainHeader || 'Порт'} (${subTitle.toUpperCase()})`;
       } else if (!title && subTitle) {
         title = subTitle;
@@ -157,12 +164,11 @@ for (const name of workbook.SheetNames) {
 
     for (let rIdx = dataStartIndex; rIdx < rawData.length; rIdx++) {
       const rowData = rawData[rIdx];
-      if (!rowData || rowData.every(c => c === null || String(c).trim() === '')) continue;
+      if (!rowData || rowData.every((c) => c === null || String(c).trim() === '')) continue;
 
-      const nonEmptyCells = rowData.filter(c => c !== null && String(c).trim() !== '');
-      const rowJoined = nonEmptyCells.map(c => String(c).toLowerCase()).join(' ');
+      const nonEmptyCells = rowData.filter((c) => c !== null && String(c).trim() !== '');
+      const rowJoined = nonEmptyCells.map((c) => String(c).toLowerCase()).join(' ');
 
-      // Пропускаем дублирующиеся шапки внутри таблицы (как в KES_NEW на строках 9-10)
       if (
         (rowJoined.includes('функциональная роль') && rowJoined.includes('порт')) ||
         (nonEmptyCells.length <= 2 && /^(udp|tcp|\s)+$/i.test(rowJoined))
@@ -171,22 +177,23 @@ for (const name of workbook.SheetNames) {
         continue;
       }
 
-      // Если в строке заполнена только 1 ячейка (например, "Для серверов" в KES_NEW) — запоминаем как раздел
-      if (nonEmptyCells.length === 1 && !/https?:\/\/|\d+\.\d+\.\d+\.\d+/i.test(String(nonEmptyCells[0]))) {
+      if (
+        nonEmptyCells.length === 1 &&
+        !/https?:\/\/|\d+\.\d+\.\d+\.\d+/i.test(String(nonEmptyCells[0]))
+      ) {
         currentSectionTitle = String(nonEmptyCells[0]).trim();
         prevRowCache = null;
         continue;
       }
 
       const rawValues: Record<string, any> = {};
-      columns.forEach(col => {
+      columns.forEach((col) => {
         const cellIdx = parseInt(col.key.replace('col_', ''), 10);
         rawValues[col.key] = rowData[cellIdx];
       });
 
-      // Наследование полей для строк-продолжений (кейс Сбербанк, где заполнена только ячейка Destination)
-      const sourceCol = columns.find(c => c.semanticRole === 'source');
-      const destCol = columns.find(c => c.semanticRole === 'destination');
+      const sourceCol = columns.find((c) => c.semanticRole === 'source');
+      const destCol = columns.find((c) => c.semanticRole === 'destination');
       if (
         prevRowCache &&
         destCol &&
@@ -194,7 +201,7 @@ for (const name of workbook.SheetNames) {
         sourceCol &&
         !rawValues[sourceCol.key]
       ) {
-        columns.forEach(col => {
+        columns.forEach((col) => {
           if (col.key !== destCol.key && !rawValues[col.key]) {
             rawValues[col.key] = prevRowCache![col.key];
           }
@@ -202,37 +209,46 @@ for (const name of workbook.SheetNames) {
       }
       prevRowCache = { ...rawValues };
 
-      // Извлекаем сетевую семантику
       let sourceVal = '';
       let destVal = '';
       let protoColVal = '';
       const ports: ParsedNetworkMeta['ports'] = [];
 
-      columns.forEach(col => {
+      columns.forEach((col) => {
+        if (col.semanticRole === 'protocol' && rawValues[col.key]) {
+          protoColVal = String(rawValues[col.key]).trim().toUpperCase();
+        }
+      });
+
+      columns.forEach((col) => {
         const val = rawValues[col.key];
         if (!val || String(val).trim() === '-') return;
         const strVal = String(val).trim();
 
         if (col.semanticRole === 'source') sourceVal = strVal;
         if (col.semanticRole === 'destination') destVal = strVal;
-        if (col.semanticRole === 'protocol') protoColVal = strVal.toUpperCase();
+
         if (col.semanticRole === 'port_tcp') {
-          ports.push({ raw: strVal, list: extractPortTokens(strVal), protocol: 'TCP' });
+          const list = extractPortTokens(strVal);
+          if (list.length > 0) ports.push({ raw: strVal, list, protocol: 'TCP' });
         }
         if (col.semanticRole === 'port_udp') {
-          ports.push({ raw: strVal, list: extractPortTokens(strVal), protocol: 'UDP' });
+          const list = extractPortTokens(strVal);
+          if (list.length > 0) ports.push({ raw: strVal, list, protocol: 'UDP' });
         }
         if (col.semanticRole === 'port') {
-          const isUdp = /udp/i.test(strVal) || protoColVal === 'UDP';
-          ports.push({
-            raw: strVal,
-            list: extractPortTokens(strVal),
-            protocol: isUdp ? 'UDP' : 'TCP',
-          });
+          const list = extractPortTokens(strVal);
+          if (list.length > 0) {
+            const isUdp = /udp/i.test(strVal) || protoColVal === 'UDP';
+            ports.push({
+              raw: strVal,
+              list,
+              protocol: isUdp ? 'UDP' : 'TCP',
+            });
+          }
         }
       });
 
-      // Определяем возможность проверки (10.132.x.x — внешний московский сегмент KSC)
       const isExternalSource = sourceVal.includes('10.132.');
       const isOutbound = sourceVal.includes('10.194.') || sourceVal.includes('10.196.');
       const isTestable = Boolean(sourceVal && destVal && ports.length > 0 && !isExternalSource);
@@ -243,21 +259,22 @@ for (const name of workbook.SheetNames) {
         __sectionTitle: currentSectionTitle,
         rawValues,
         meta: {
-          sources: sourceVal ? sourceVal.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean) : [],
-          destinations: destVal ? destVal.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean) : [],
+          sources: sourceVal
+            ? sourceVal.split(/[\n,;]+/).map((s) => s.trim()).filter(Boolean)
+            : [],
+          destinations: destVal
+            ? destVal.split(/[\n,;]+/).map((s) => s.trim()).filter(Boolean)
+            : [],
           ports,
           isTestable,
           untestableReason: isExternalSource
-            ? 'Хост-источник (10.132.x.x) находится во внешнем сегменте — нет прав для запуска проверки'
+            ? 'Хост-источник (10.132.x.x) находится во внешнем сегменте — нет прав администратора'
             : !ports.length
             ? 'Не указаны порты для проверки'
             : undefined,
           direction: isExternalSource ? 'inbound' : isOutbound ? 'outbound' : 'internal',
         },
         checkStatus: isTestable ? 'idle' : 'untestable',
-        checkLog: isExternalSource
-          ? 'Проверка заблокирована политикой безопасности: инициирующий узел находится вне подконтрольного домена AD.'
-          : undefined,
       });
     }
 
@@ -268,7 +285,7 @@ for (const name of workbook.SheetNames) {
       portDictionary,
       stats: {
         totalRows: rows.length,
-        testableRows: rows.filter(r => r.meta.isTestable).length,
+        testableRows: rows.filter((r) => r.meta.isTestable).length,
       },
     });
   }
