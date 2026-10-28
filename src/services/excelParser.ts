@@ -45,8 +45,9 @@ function fillMergedCells(rawData: any[][], merges: XLSX.Range[] = []) {
     const val = rawData[merge.s.r]?.[merge.s.c];
     if (val === null || val === undefined) continue;
     for (let r = merge.s.r; r <= merge.e.r; r++) {
+      if (!rawData[r]) continue;
       for (let c = merge.s.c; c <= merge.e.c; c++) {
-        if (rawData[r] && (rawData[r][c] === null || rawData[r][c] === undefined)) {
+        if (rawData[r][c] === null || rawData[r][c] === undefined) {
           rawData[r][c] = val;
         }
       }
@@ -68,7 +69,7 @@ export async function parseExcelMatrix(file: File): Promise<ParsedMatrixSheet[]>
         defval: null,
       });
       rows.forEach((r) => {
-        if (!r[0]) return;
+        if (!r || !r[0]) return;
         const rawCell0 = String(r[0]).trim();
         const rawCell1 = r[1] ? String(r[1]).trim() : '';
 
@@ -95,17 +96,19 @@ export async function parseExcelMatrix(file: File): Promise<ParsedMatrixSheet[]>
 
   for (const sheetName of matrixSheetNames) {
     const worksheet = workbook.Sheets[sheetName];
+    // ВАЖНО: blankrows: true сохраняет физические индексы строк для корректной работы !merges
     const rawData: any[][] = XLSX.utils.sheet_to_json(worksheet, {
       header: 1,
       defval: null,
-      blankrows: false,
+      blankrows: true,
     });
 
     if (rawData.length === 0) continue;
     fillMergedCells(rawData, worksheet['!merges']);
 
     let headerRowIndex = 0;
-    for (let i = 0; i < Math.min(10, rawData.length); i++) {
+    for (let i = 0; i < Math.min(12, rawData.length); i++) {
+      if (!rawData[i]) continue;
       const rowStr = rawData[i].map((c) => String(c || '').toLowerCase()).join(' ');
       if ((rowStr.includes('ip') || rowStr.includes('source')) && rowStr.includes('порт')) {
         headerRowIndex = i;
@@ -254,7 +257,7 @@ export async function parseExcelMatrix(file: File): Promise<ParsedMatrixSheet[]>
       const isTestable = Boolean(sourceVal && destVal && ports.length > 0 && !isExternalSource);
 
       rows.push({
-        __id: `row_${sheetName}_${rIdx}`,
+        __id: `row_${sheetName}_${rows.length + 1}`,
         __rowNumber: rows.length + 1,
         __sectionTitle: currentSectionTitle,
         rawValues,
@@ -278,16 +281,18 @@ export async function parseExcelMatrix(file: File): Promise<ParsedMatrixSheet[]>
       });
     }
 
-    resultSheets.push({
-      sheetName,
-      columns,
-      rows,
-      portDictionary,
-      stats: {
-        totalRows: rows.length,
-        testableRows: rows.filter((r) => r.meta.isTestable).length,
-      },
-    });
+    if (rows.length > 0) {
+      resultSheets.push({
+        sheetName,
+        columns,
+        rows,
+        portDictionary,
+        stats: {
+          totalRows: rows.length,
+          testableRows: rows.filter((r) => r.meta.isTestable).length,
+        },
+      });
+    }
   }
 
   return resultSheets;

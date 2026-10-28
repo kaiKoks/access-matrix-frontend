@@ -36,16 +36,18 @@ export const useMatrixStore = create<MatrixUiState>((set) => ({
         .replace(/^Матрица доступа\s*[-–]?\s*/i, '')
         .trim() || fileName;
 
-    const enriched = sheets.map((sh) => ({
-      ...sh,
-      rows: sh.rows.map((r) => ({
-        ...r,
-        __id: `draft_${sh.sheetName}_${r.__rowNumber}`,
-        __systemId: 'DRAFT',
-        __systemName: cleanName,
-        __sheetName: sh.sheetName,
-      })),
-    }));
+    const enriched = sheets
+      .filter((sh) => Array.isArray(sh.rows) && sh.rows.length > 0)
+      .map((sh) => ({
+        ...sh,
+        rows: sh.rows.map((r, idx) => ({
+          ...r,
+          __id: `draft_${sh.sheetName}_${r.__rowNumber || idx + 1}`,
+          __systemId: 'DRAFT',
+          __systemName: cleanName,
+          __sheetName: sh.sheetName,
+        })),
+      }));
 
     set({
       draftName: cleanName,

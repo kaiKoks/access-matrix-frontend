@@ -3,7 +3,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toolbar } from '@/components/Toolbar';
 import { MatrixTable } from '@/components/MatrixTable';
 import { RowDetailDrawer } from '@/components/RowDetailDrawer';
-import { ShieldCheck } from 'lucide-react';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,7 +21,6 @@ export const App: React.FC = () => {
           <Toolbar />
           <MatrixTable />
         </main>
-
         <RowDetailDrawer />
       </div>
     </QueryClientProvider>

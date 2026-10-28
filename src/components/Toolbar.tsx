@@ -3,6 +3,7 @@ import { useMatrixStore } from '@/store/useMatrixStore';
 import {
   useCatalogQuery,
   useSaveSystemMutation,
+  useDeleteSystemMutation,
   useCheckBatchMutation,
 } from '@/hooks/useMatrixQueries';
 import { parseExcelMatrix } from '@/services/excelParser';
@@ -15,8 +16,10 @@ import {
   Layers,
   Download,
   Save,
+  Database,
   Check,
   AtSign,
+  Trash2,
 } from 'lucide-react';
 
 export function formatMatrixTag(name: string): string {
@@ -45,16 +48,25 @@ export function parseSearchInput(rawQuery: string): { matrixTags: string[]; text
   };
 }
 
-// Формирует список независимых табличных групп (каждая со своими колонками)
-export function buildVisibleMatrixGroups(
-  catalog: SavedMatrixSystem[],
-  activeSystemId: string,
-  draftName: string,
-  draftSheets: ParsedMatrixSheet[],
-  activeSheetIndex: number,
-  searchQuery: string,
-  statusFilter: string
-): MatrixViewGroup[] {
+export interface BuildGroupsParams {
+  catalog: SavedMatrixSystem[];
+  activeSystemId: string;
+  draftName: string;
+  draftSheets: ParsedMatrixSheet[];
+  activeSheetIndex: number;
+  searchQuery: string;
+  statusFilter: string;
+}
+
+export function buildVisibleMatrixGroups({
+  catalog,
+  activeSystemId,
+  draftName,
+  draftSheets,
+  activeSheetIndex,
+  searchQuery,
+  statusFilter,
+}: BuildGroupsParams): MatrixViewGroup[] {
   const { matrixTags, textQuery } = parseSearchInput(searchQuery);
   const isMultiMode = activeSystemId === 'ALL' || matrixTags.length > 0;
 
@@ -70,13 +82,14 @@ export function buildVisibleMatrixGroups(
     });
 
   if (!isMultiMode) {
+    // 1. Локальный просмотр без сохранения на бэк
     if (activeSystemId === 'DRAFT') {
-      const sh = draftSheets[activeSheetIndex];
+      const sh = draftSheets[activeSheetIndex] || draftSheets[0];
       if (!sh) return [];
       return [
         {
           groupId: `draft_${sh.sheetName}`,
-          systemName: draftName || 'Черновик',
+          systemName: `${draftName || 'Локальный просмотр'} (не сохранено)`,
           sheetName: sh.sheetName,
           columns: sh.columns,
           portDictionary: sh.portDictionary,
@@ -85,8 +98,9 @@ export function buildVisibleMatrixGroups(
       ];
     }
 
+    // 2. Выбрана конкретная сохраненная матрица из каталога
     const sys = catalog.find((c) => c.id === activeSystemId);
-    const sh = sys?.sheets[activeSheetIndex];
+    const sh = sys?.sheets[activeSheetIndex] || sys?.sheets[0];
     if (!sys || !sh) return [];
     return [
       {
@@ -100,7 +114,7 @@ export function buildVisibleMatrixGroups(
     ];
   }
 
-  // Мульти-матричный режим: каждая подходящая матрица идет отдельной группой со своей шапкой
+  // 3. Режим "Все матрицы" или фильтр через @матрица
   const targetSystems =
     matrixTags.length > 0
       ? catalog.filter((sys) =>
@@ -147,6 +161,7 @@ export const Toolbar: React.FC = () => {
 
   const { data: catalog = [] } = useCatalogQuery();
   const saveMutation = useSaveSystemMutation();
+  const deleteMutation = useDeleteSystemMutation();
   const batchCheckMutation = useCheckBatchMutation();
 
   const {
@@ -170,15 +185,15 @@ export const Toolbar: React.FC = () => {
   const singleSystemSheets =
     activeSystemId === 'DRAFT' ? draftSheets : currentSystem ? currentSystem.sheets : [];
 
-  const visibleGroups = buildVisibleMatrixGroups(
+  const visibleGroups = buildVisibleMatrixGroups({
     catalog,
     activeSystemId,
     draftName,
     draftSheets,
     activeSheetIndex,
     searchQuery,
-    statusFilter
-  );
+    statusFilter,
+  });
 
   const allVisibleRows = visibleGroups.flatMap((g) => g.rows);
   const testableCount = allVisibleRows.filter((r) => r.meta.isTestable).length;
@@ -207,11 +222,16 @@ export const Toolbar: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Локальное открытие файла .xlsx (без отправки на бэкенд)
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
       const parsed = await parseExcelMatrix(file);
+      if (parsed.length === 0) {
+        alert('В выбранном файле не найдено таблиц с правилами');
+        return;
+      }
       setDraftMatrix(file.name, parsed);
       const cleanName = file.name
         .replace(/\.xlsx?$/i, '')
@@ -225,7 +245,9 @@ export const Toolbar: React.FC = () => {
     e.target.value = '';
   };
 
+  // Сохранение открытой матрицы на бэкенд по клику на кнопку
   const handleSaveToBackend = async () => {
+    if (!draftSheets.length) return;
     await saveMutation.mutateAsync({
       name: (customSystemName || draftName || 'Новая матрица').trim(),
       sheets: draftSheets,
@@ -326,10 +348,22 @@ export const Toolbar: React.FC = () => {
               </option>
             ))}
             {draftSheets.length > 0 && (
-              <option value="DRAFT">Черновик: {draftName}</option>
+              <option value="DRAFT">
+                Локально: {draftName} ({draftSheets.reduce((acc, s) => acc + s.rows.length, 0)})
+              </option>
             )}
           </select>
         </div>
+
+        {activeSystemId !== 'ALL' && activeSystemId !== 'DRAFT' && currentSystem && (
+          <button
+            onClick={() => deleteMutation.mutate(activeSystemId)}
+            title="Удалить матрицу с бэкенда"
+            className="p-2 rounded-lg bg-zinc-800 hover:bg-rose-600/20 text-zinc-400 hover:text-rose-400 border border-zinc-700 transition"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        )}
 
         <input
           type="file"
@@ -343,9 +377,10 @@ export const Toolbar: React.FC = () => {
           className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium border border-zinc-700 transition"
         >
           <Upload className="w-4 h-4" />
-          Загрузить матрицу (.xlsx)
+          Открыть матрицу (.xlsx)
         </button>
 
+        {/* Поле имени и кнопка "Сохранить на бэк" для локально открытой матрицы */}
         {activeSystemId === 'DRAFT' && draftSheets.length > 0 && (
           <div className="flex items-center gap-1.5 bg-zinc-950 p-1 rounded-lg border border-zinc-800">
             <input
@@ -366,7 +401,8 @@ export const Toolbar: React.FC = () => {
                 </>
               ) : (
                 <>
-                  <Save className="w-3.5 h-3.5" /> Сохранить на бэк
+                  <Save className="w-3.5 h-3.5" />
+                  {saveMutation.isPending ? 'Сохранение...' : 'Сохранить на бэк'}
                 </>
               )}
             </button>
@@ -464,7 +500,7 @@ export const Toolbar: React.FC = () => {
               ) : (
                 <div className="p-3 text-center text-xs text-zinc-500">
                   {catalog.length === 0
-                    ? 'Нет сохраненных матриц. Загрузите .xlsx и нажмите «Сохранить на бэк».'
+                    ? 'Нет сохраненных матриц. Откройте .xlsx и нажмите «Сохранить на бэк».'
                     : 'Матрица не найдена'}
                 </div>
               )}

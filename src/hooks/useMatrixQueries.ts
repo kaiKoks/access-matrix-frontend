@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchCatalogFromBackend,
   saveSystemToBackend,
+  deleteSystemFromBackend,
   simulateNetworkCheck,
 } from '@/services/networkTester';
 import { useMatrixStore } from '@/store/useMatrixStore';
@@ -9,30 +10,14 @@ import type { DynamicMatrixRow, ParsedMatrixSheet, SavedMatrixSystem } from '@/t
 
 export const CATALOG_QUERY_KEY = ['matrix-catalog'] as const;
 
-// 1. Запрос каталога сохраненных матриц
 export function useCatalogQuery() {
   return useQuery({
     queryKey: CATALOG_QUERY_KEY,
-    queryFn: async () => {
-      const systems = await fetchCatalogFromBackend();
-      return systems.map((sys) => ({
-        ...sys,
-        sheets: sys.sheets.map((sh) => ({
-          ...sh,
-          rows: sh.rows.map((r) => ({
-            ...r,
-            __id: r.__id.startsWith(sys.id) ? r.__id : `${sys.id}_${sh.sheetName}_${r.__rowNumber}`,
-            __systemId: sys.id,
-            __systemName: sys.name,
-            __sheetName: sh.sheetName,
-          })),
-        })),
-      }));
-    },
+    queryFn: fetchCatalogFromBackend,
   });
 }
 
-// 2. Мутация сохранения новой матрицы на бэкенд
+// Сохранение открытой матрицы на бэкенд по кнопке "Сохранить на бэк"
 export function useSaveSystemMutation() {
   const queryClient = useQueryClient();
   const selectSystem = useMatrixStore((s) => s.selectSystem);
@@ -43,43 +28,47 @@ export function useSaveSystemMutation() {
       return await saveSystemToBackend(name, sheets);
     },
     onSuccess: (savedSystem: SavedMatrixSystem) => {
-      const normalizedSaved: SavedMatrixSystem = {
-        ...savedSystem,
-        sheets: savedSystem.sheets.map((sh) => ({
-          ...sh,
-          rows: sh.rows.map((r) => ({
-            ...r,
-            __id: `${savedSystem.id}_${sh.sheetName}_${r.__rowNumber}`,
-            __systemId: savedSystem.id,
-            __systemName: savedSystem.name,
-            __sheetName: sh.sheetName,
-          })),
-        })),
-      };
-
       queryClient.setQueryData<SavedMatrixSystem[]>(CATALOG_QUERY_KEY, (old = []) => {
-        const exists = old.some((c) => c.id === normalizedSaved.id);
-        return exists
-          ? old.map((c) => (c.id === normalizedSaved.id ? normalizedSaved : c))
-          : [...old, normalizedSaved];
+        const filtered = old.filter(
+          (c) =>
+            c.id !== savedSystem.id &&
+            c.name.toLowerCase() !== savedSystem.name.toLowerCase()
+        );
+        return [...filtered, savedSystem];
       });
-
       clearDraft();
-      selectSystem(normalizedSaved.id);
+      selectSystem(savedSystem.id);
     },
   });
 }
 
-// Вспомогательная функция обновления строки в кэше React Query и в черновике Zustand
+export function useDeleteSystemMutation() {
+  const queryClient = useQueryClient();
+  const selectSystem = useMatrixStore((s) => s.selectSystem);
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await deleteSystemFromBackend(id);
+      return id;
+    },
+    onSuccess: (deletedId) => {
+      queryClient.setQueryData<SavedMatrixSystem[]>(CATALOG_QUERY_KEY, (old = []) =>
+        old.filter((sys) => sys.id !== deletedId)
+      );
+      selectSystem('ALL');
+    },
+  });
+}
+
 function updateRowAcrossState(
   queryClient: ReturnType<typeof useQueryClient>,
   rowId: string,
   updater: (row: DynamicMatrixRow) => DynamicMatrixRow
 ) {
-  // Обновляем в черновике (если проверяется несохраненный файл)
+  // 1. Обновляем в локально открытой матрице (если не сохранена на бэк)
   useMatrixStore.getState().updateDraftRow(rowId, updater);
 
-  // Обновляем в кэше каталога TanStack Query
+  // 2. Обновляем в кэше каталога TanStack Query
   queryClient.setQueryData<SavedMatrixSystem[]>(CATALOG_QUERY_KEY, (old) => {
     if (!old) return old;
     return old.map((sys) => ({
@@ -92,7 +81,6 @@ function updateRowAcrossState(
   });
 }
 
-// 3. Мутация проверки одной строки
 export function useCheckRowMutation() {
   const queryClient = useQueryClient();
 
@@ -104,7 +92,7 @@ export function useCheckRowMutation() {
       }));
 
       const result = await simulateNetworkCheck(row);
-      const checkedAt = new Date().toLocaleTimeString();
+      const checkedAt = result.checkedAt || new Date().toLocaleTimeString();
 
       updateRowAcrossState(queryClient, row.__id, (r) => ({
         ...r,
@@ -119,7 +107,6 @@ export function useCheckRowMutation() {
   });
 }
 
-// 4. Мутация пакетной проверки списка строк
 export function useCheckBatchMutation() {
   const { mutateAsync: checkSingleRow } = useCheckRowMutation();
 

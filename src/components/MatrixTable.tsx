@@ -43,16 +43,15 @@ export const MatrixTable: React.FC = () => {
 
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
 
-  const visibleGroups = buildVisibleMatrixGroups(
+  const visibleGroups = buildVisibleMatrixGroups({
     catalog,
     activeSystemId,
     draftName,
     draftSheets,
     activeSheetIndex,
     searchQuery,
-    statusFilter
-  );
-
+    statusFilter,
+  });
   const handleSort = (groupId: string, key: string) => {
     setSortConfig((prev) => {
       if (prev?.groupId === groupId && prev.key === key) {
@@ -81,11 +80,11 @@ export const MatrixTable: React.FC = () => {
         const sortedRows =
           sortConfig && sortConfig.groupId === group.groupId
             ? [...group.rows].sort((a, b) => {
-                const aVal = String(a.rawValues[sortConfig.key] ?? '');
-                const bVal = String(b.rawValues[sortConfig.key] ?? '');
-                const cmp = aVal.localeCompare(bVal, 'ru', { numeric: true });
-                return sortConfig.direction === 'asc' ? cmp : -cmp;
-              })
+              const aVal = String(a.rawValues[sortConfig.key] ?? '');
+              const bVal = String(b.rawValues[sortConfig.key] ?? '');
+              const cmp = aVal.localeCompare(bVal, 'ru', { numeric: true });
+              return sortConfig.direction === 'asc' ? cmp : -cmp;
+            })
             : group.rows;
 
         return (
@@ -118,15 +117,13 @@ export const MatrixTable: React.FC = () => {
                       return (
                         <th
                           key={col.key}
-                          className={`py-3 px-4 whitespace-nowrap ${
-                            centered ? 'text-center' : 'text-left'
-                          }`}
+                          className={`py-3 px-4 whitespace-nowrap ${centered ? 'text-center' : 'text-left'
+                            }`}
                         >
                           <button
                             onClick={() => handleSort(group.groupId, col.key)}
-                            className={`inline-flex items-center gap-1.5 hover:text-zinc-200 transition font-medium ${
-                              centered ? 'justify-center mx-auto' : 'text-left'
-                            }`}
+                            className={`inline-flex items-center gap-1.5 hover:text-zinc-200 transition font-medium ${centered ? 'justify-center mx-auto' : 'text-left'
+                              }`}
                           >
                             <span>{col.headerTitle}</span>
                             {isSorted ? (
@@ -167,9 +164,8 @@ export const MatrixTable: React.FC = () => {
                         )}
                         <tr
                           onClick={() => setSelectedRowId(row.__id)}
-                          className={`transition cursor-pointer ${
-                            isSelected ? 'bg-blue-950/30' : 'hover:bg-zinc-800/40'
-                          }`}
+                          className={`transition cursor-pointer ${isSelected ? 'bg-blue-950/30' : 'hover:bg-zinc-800/40'
+                            }`}
                         >
                           <td className="py-3 px-4 text-center font-mono text-zinc-500 align-middle">
                             {row.__rowNumber}
@@ -194,9 +190,8 @@ export const MatrixTable: React.FC = () => {
                             return (
                               <td
                                 key={col.key}
-                                className={`py-3 px-4 max-w-md align-middle ${
-                                  centered ? 'text-center' : 'text-left'
-                                }`}
+                                className={`py-3 px-4 max-w-md align-middle ${centered ? 'text-center' : 'text-left'
+                                  }`}
                               >
                                 {isEndpoint ? (
                                   <EndpointCell value={val} />

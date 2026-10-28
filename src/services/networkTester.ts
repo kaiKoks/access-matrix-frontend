@@ -5,15 +5,16 @@ import type {
   SocketCheckItem,
   NetworkCheckStatus,
   SavedMatrixSystem,
-} from '../types/matrix';
+} from '@/types/matrix';
 
 const API_BASE_URL = 'http://localhost:3000/api';
-const LOCAL_STORAGE_CATALOG_KEY = 'matrix_catalog_fallback_v1';
+const STORAGE_KEY = 'matrix_catalog_clean_v2';
 
 export interface RowCheckSummary {
   status: NetworkCheckStatus;
   socketResults: SocketCheckItem[];
   log: string;
+  checkedAt?: string;
 }
 
 function expandPortList(token: string): string[] {
@@ -67,6 +68,7 @@ export function buildAllSocketCombinations(row: DynamicMatrixRow): Omit<
   return combinations;
 }
 
+// POST запрос на бэкенд для проверки правила
 export async function simulateNetworkCheck(row: DynamicMatrixRow): Promise<RowCheckSummary> {
   try {
     const response = await fetch(`${API_BASE_URL}/checker/test-rule`, {
@@ -80,149 +82,129 @@ export async function simulateNetworkCheck(row: DynamicMatrixRow): Promise<RowCh
     });
 
     if (response.ok) {
-      const data = await response.json();
-      if (Array.isArray(data.socketResults) && data.socketResults.length > 0) {
-        const nowClock = Math.floor(Date.now() / 1000);
-        const normalizedSockets: SocketCheckItem[] = data.socketResults.map(
-          (s: any, idx: number) => {
-            const isOpen = s.status === 'accessible' || s.lastvalue === '1';
-            const proto = s.protocol || 'TCP';
-            return {
-              id: s.id || `sock_${idx}`,
-              source: s.source,
-              destination: s.destination,
-              port: String(s.port),
-              protocol: proto,
-              zabbixKey:
-                s.zabbixKey ||
-                (proto === 'UDP'
-                  ? `custom.udp.port[${s.port}]`
-                  : `net.tcp.port[127.0.0.1, ${s.port}]`),
-              lastvalue: isOpen ? '1' : '0',
-              lastclock: s.lastclock || nowClock,
-              status: isOpen ? 'accessible' : 'blocked',
-            };
-          }
-        );
-
-        const hasAtLeastOneOpen = normalizedSockets.some((s) => s.status === 'accessible');
-        return {
-          status: hasAtLeastOneOpen ? 'accessible' : 'blocked',
-          socketResults: normalizedSockets,
-          log: data.log,
-        };
-      }
+      return await response.json();
     }
-  } catch {
-    // Fallback
+  } catch (err) {
+    console.warn('Не удалось связаться с бэкендом, выполняется локальная проверка:', err);
   }
 
-  return emulateZabbixApiCheck(row);
-}
-
-async function emulateZabbixApiCheck(row: DynamicMatrixRow): Promise<RowCheckSummary> {
-  await new Promise((res) => setTimeout(res, 200 + Math.random() * 250));
-
+  // Резервная эмуляция, если бэкенд не запущен
+  await new Promise((r) => setTimeout(r, 200));
   const combinations = buildAllSocketCombinations(row);
   const nowUnix = Math.floor(Date.now() / 1000);
-  const socketResults: SocketCheckItem[] = [];
 
-  const logLines: string[] = [
-    `POST /zabbix/api_jsonrpc.php (method: "item.get")`,
-    `Проверено связок: ${combinations.length}`,
-    `------------------------------------------------------------`,
-  ];
-
-  for (const combo of combinations) {
+  const socketResults: SocketCheckItem[] = combinations.map((c) => {
     const isOpen = Math.random() > 0.2;
-    const lastvalue: '1' | '0' = isOpen ? '1' : '0';
-    const lastclock = nowUnix - Math.floor(2 + Math.random() * 40);
-
-    socketResults.push({
-      ...combo,
-      lastvalue,
-      lastclock,
+    return {
+      ...c,
+      lastvalue: isOpen ? '1' : '0',
+      lastclock: nowUnix,
       status: isOpen ? 'accessible' : 'blocked',
-    });
+    };
+  });
 
-    // Не дублируем :port, если URL уже заканчивается на этот порт
-    const destWithPort = combo.destination.endsWith(`:${combo.port}`)
-      ? combo.destination
-      : `${combo.destination}:${combo.port}`;
-
-    logLines.push(
-      `[${combo.protocol}] ${combo.source} -> ${destWithPort}\n` +
-        `  key_: "${combo.zabbixKey}" | lastvalue: "${lastvalue}" | lastclock: ${new Date(
-          lastclock * 1000
-        ).toLocaleTimeString()}`
-    );
-  }
-
-  const hasAtLeastOneOpen = socketResults.some((s) => s.status === 'accessible');
-
+  const hasOpen = socketResults.some((s) => s.status === 'accessible');
   return {
-    status: hasAtLeastOneOpen ? 'accessible' : 'blocked',
+    status: hasOpen ? 'accessible' : 'blocked',
     socketResults,
-    log: logLines.join('\n'),
+    log: socketResults
+      .map((s) => `[${s.protocol}] ${s.source} -> ${s.destination}:${s.port} | lastvalue=${s.lastvalue}`)
+      .join('\n'),
+    checkedAt: new Date().toLocaleTimeString(),
   };
 }
 
+// Отфильтровывает пустые матрицы (с 0 строк)
+function filterValidSystems(systems: SavedMatrixSystem[]): SavedMatrixSystem[] {
+  if (!Array.isArray(systems)) return [];
+  return systems.filter(
+    (sys) =>
+      sys &&
+      Array.isArray(sys.sheets) &&
+      sys.sheets.some((sh) => Array.isArray(sh.rows) && sh.rows.length > 0)
+  );
+}
+
+// GET /api/catalog
 export async function fetchCatalogFromBackend(): Promise<SavedMatrixSystem[]> {
   try {
     const res = await fetch(`${API_BASE_URL}/catalog`);
     if (res.ok) {
-      const data = await res.json();
-      localStorage.setItem(LOCAL_STORAGE_CATALOG_KEY, JSON.stringify(data));
+      const data = filterValidSystems(await res.json());
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
       return data;
     }
-  } catch {}
-  const cached = localStorage.getItem(LOCAL_STORAGE_CATALOG_KEY);
-  return cached ? JSON.parse(cached) : [];
+  } catch (err) {
+    console.warn('Бэкенд /api/catalog недоступен, чтение из кэша:', err);
+  }
+
+  try {
+    const cached = localStorage.getItem(STORAGE_KEY);
+    return cached ? filterValidSystems(JSON.parse(cached)) : [];
+  } catch {
+    return [];
+  }
 }
 
+// POST /api/catalog
 export async function saveSystemToBackend(
   name: string,
   sheets: ParsedMatrixSheet[]
 ): Promise<SavedMatrixSystem> {
-  const enrichedSheets = sheets.map((s) => ({
-    ...s,
-    rows: s.rows.map((r) => ({
-      ...r,
-      __systemName: name,
-      __sheetName: s.sheetName,
-    })),
-  }));
+  const sysId = `sys_${Date.now()}`;
+  const cleanName = (name || 'Матрица').trim();
+
+  const normalizedSheets: ParsedMatrixSheet[] = sheets
+    .filter((sh) => Array.isArray(sh.rows) && sh.rows.length > 0)
+    .map((sh) => ({
+      ...sh,
+      rows: sh.rows.map((r, i) => ({
+        ...r,
+        __id: `${sysId}_${sh.sheetName}_${r.__rowNumber || i + 1}`,
+        __systemId: sysId,
+        __systemName: cleanName,
+        __sheetName: sh.sheetName,
+      })),
+    }));
 
   try {
     const res = await fetch(`${API_BASE_URL}/catalog`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, sheets: enrichedSheets }),
+      body: JSON.stringify({ name: cleanName, sheets: normalizedSheets }),
     });
+
     if (res.ok) {
       const saved: SavedMatrixSystem = await res.json();
-      const current = await fetchCatalogFromBackend();
-      localStorage.setItem(LOCAL_STORAGE_CATALOG_KEY, JSON.stringify(current));
       return saved;
     }
-  } catch {}
-
-  const list = await fetchCatalogFromBackend();
-  const existingIdx = list.findIndex((s) => s.name.toLowerCase() === name.toLowerCase());
-  const record: SavedMatrixSystem = {
-    id: existingIdx >= 0 ? list[existingIdx].id : `sys_${Date.now()}`,
-    name,
-    updatedAt: new Date().toLocaleString('ru-RU'),
-    sheets: enrichedSheets,
-  };
-
-  if (existingIdx >= 0) {
-    list[existingIdx] = record;
-  } else {
-    list.push(record);
+  } catch (err) {
+    console.warn('Не удалось отправить на бэкенд, сохранено локально:', err);
   }
-  localStorage.setItem(LOCAL_STORAGE_CATALOG_KEY, JSON.stringify(list));
+
+  // Если бэкенд недоступен, сохраняем локально
+  const current = await fetchCatalogFromBackend();
+  const record: SavedMatrixSystem = {
+    id: sysId,
+    name: cleanName,
+    updatedAt: new Date().toLocaleString('ru-RU'),
+    sheets: normalizedSheets,
+  };
+  const next = [...current.filter((c) => c.name.toLowerCase() !== cleanName.toLowerCase()), record];
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   return record;
+}
+
+// DELETE /api/catalog/:id
+export async function deleteSystemFromBackend(id: string): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/catalog/${id}`, { method: 'DELETE' });
+  } catch {}
+  const current = await fetchCatalogFromBackend();
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify(current.filter((c) => c.id !== id))
+  );
 }
 
 export function exportMatrixToExcel(sheet: ParsedMatrixSheet, fileNamePrefix = 'Отчет') {
@@ -240,7 +222,7 @@ export function exportMatrixToExcel(sheet: ParsedMatrixSheet, fileNamePrefix = '
           : row.checkStatus === 'blocked'
           ? `Закрыт (0/${total})`
           : row.checkStatus === 'untestable'
-          ? 'Н/Д'
+          ? 'Недоступно для проверки'
           : 'Не проверен',
       'Время проверки': row.lastCheckedAt || '—',
     };
