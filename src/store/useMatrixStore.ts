@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { ParsedMatrixSheet, DynamicMatrixRow } from '@/types/matrix';
+import type { CheckerMode } from '@/services/networkTester';
 
 interface MatrixUiState {
   activeSystemId: string;
@@ -9,6 +10,8 @@ interface MatrixUiState {
   selectedRowId: string | null;
   searchQuery: string;
   statusFilter: string;
+  checkerMode: CheckerMode;
+  uiError: string | null;
 
   setDraftMatrix: (fileName: string, sheets: ParsedMatrixSheet[]) => void;
   updateDraftRow: (rowId: string, updater: (r: DynamicMatrixRow) => DynamicMatrixRow) => void;
@@ -18,6 +21,8 @@ interface MatrixUiState {
   setSelectedRowId: (id: string | null) => void;
   setSearchQuery: (query: string) => void;
   setStatusFilter: (filter: string) => void;
+  setCheckerMode: (mode: CheckerMode) => void;
+  setUiError: (err: string | null) => void;
 }
 
 export const useMatrixStore = create<MatrixUiState>((set) => ({
@@ -28,6 +33,8 @@ export const useMatrixStore = create<MatrixUiState>((set) => ({
   selectedRowId: null,
   searchQuery: '',
   statusFilter: 'all',
+  checkerMode: 'mock',
+  uiError: null,
 
   setDraftMatrix: (fileName, sheets) => {
     const cleanName =
@@ -55,6 +62,7 @@ export const useMatrixStore = create<MatrixUiState>((set) => ({
       activeSystemId: 'DRAFT',
       activeSheetIndex: 0,
       selectedRowId: null,
+      uiError: null,
     });
   },
 
@@ -73,10 +81,13 @@ export const useMatrixStore = create<MatrixUiState>((set) => ({
       activeSystemId: id,
       activeSheetIndex: 0,
       selectedRowId: null,
+      uiError: null,
     }),
 
   setActiveSheetIndex: (idx) => set({ activeSheetIndex: idx, selectedRowId: null }),
   setSelectedRowId: (selectedRowId) => set({ selectedRowId }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setStatusFilter: (statusFilter) => set({ statusFilter }),
+  setCheckerMode: (checkerMode) => set({ checkerMode, uiError: null }),
+  setUiError: (uiError) => set({ uiError }),
 }));

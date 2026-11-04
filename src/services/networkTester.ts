@@ -7,14 +7,28 @@ import type {
   SavedMatrixSystem,
 } from '@/types/matrix';
 
-const API_BASE_URL = 'http://localhost:3000/api';
-const STORAGE_KEY = 'matrix_catalog_clean_v2';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+
+export type CheckerMode = 'mock' | 'zabbix';
 
 export interface RowCheckSummary {
   status: NetworkCheckStatus;
   socketResults: SocketCheckItem[];
   log: string;
   checkedAt?: string;
+}
+
+// Извлекает читаемое сообщение об ошибке из ответа NestJS
+async function extractBackendError(res: Response, fallbackMsg: string): Promise<string> {
+  try {
+    const data = await res.json();
+    if (data?.message) {
+      return Array.isArray(data.message) ? data.message.join('; ') : String(data.message);
+    }
+  } catch {
+    // ignore JSON parse error
+  }
+  return `${fallbackMsg} (HTTP ${res.status})`;
 }
 
 function expandPortList(token: string): string[] {
@@ -32,6 +46,7 @@ function expandPortList(token: string): string[] {
   return /^\d+$/.test(clean) ? [clean] : [];
 }
 
+// Формирует список ожидаемых связок для предпросмотра в боковой панели
 export function buildAllSocketCombinations(row: DynamicMatrixRow): Omit<
   SocketCheckItem,
   'lastvalue' | 'lastclock' | 'status'
@@ -68,143 +83,92 @@ export function buildAllSocketCombinations(row: DynamicMatrixRow): Omit<
   return combinations;
 }
 
-// POST запрос на бэкенд для проверки правила
-export async function simulateNetworkCheck(row: DynamicMatrixRow): Promise<RowCheckSummary> {
+// 1. POST /api/checker/test-rule (без локальных фолбэков)
+export async function checkRuleOnBackend(
+  row: DynamicMatrixRow,
+  mode: CheckerMode
+): Promise<RowCheckSummary> {
+  let response: Response;
   try {
-    const response = await fetch(`${API_BASE_URL}/checker/test-rule`, {
+    response = await fetch(`${API_BASE_URL}/checker/test-rule`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sources: row.meta.sources,
         destinations: row.meta.destinations,
         ports: row.meta.ports,
+        mode,
       }),
     });
-
-    if (response.ok) {
-      return await response.json();
-    }
-  } catch (err) {
-    console.warn('Не удалось связаться с бэкендом, выполняется локальная проверка:', err);
-  }
-
-  // Резервная эмуляция, если бэкенд не запущен
-  await new Promise((r) => setTimeout(r, 200));
-  const combinations = buildAllSocketCombinations(row);
-  const nowUnix = Math.floor(Date.now() / 1000);
-
-  const socketResults: SocketCheckItem[] = combinations.map((c) => {
-    const isOpen = Math.random() > 0.2;
-    return {
-      ...c,
-      lastvalue: isOpen ? '1' : '0',
-      lastclock: nowUnix,
-      status: isOpen ? 'accessible' : 'blocked',
-    };
-  });
-
-  const hasOpen = socketResults.some((s) => s.status === 'accessible');
-  return {
-    status: hasOpen ? 'accessible' : 'blocked',
-    socketResults,
-    log: socketResults
-      .map((s) => `[${s.protocol}] ${s.source} -> ${s.destination}:${s.port} | lastvalue=${s.lastvalue}`)
-      .join('\n'),
-    checkedAt: new Date().toLocaleTimeString(),
-  };
-}
-
-// Отфильтровывает пустые матрицы (с 0 строк)
-function filterValidSystems(systems: SavedMatrixSystem[]): SavedMatrixSystem[] {
-  if (!Array.isArray(systems)) return [];
-  return systems.filter(
-    (sys) =>
-      sys &&
-      Array.isArray(sys.sheets) &&
-      sys.sheets.some((sh) => Array.isArray(sh.rows) && sh.rows.length > 0)
-  );
-}
-
-// GET /api/catalog
-export async function fetchCatalogFromBackend(): Promise<SavedMatrixSystem[]> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/catalog`);
-    if (res.ok) {
-      const data = filterValidSystems(await res.json());
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-      return data;
-    }
-  } catch (err) {
-    console.warn('Бэкенд /api/catalog недоступен, чтение из кэша:', err);
-  }
-
-  try {
-    const cached = localStorage.getItem(STORAGE_KEY);
-    return cached ? filterValidSystems(JSON.parse(cached)) : [];
   } catch {
-    return [];
+    throw new Error('Сервер бэкенда недоступен (проверьте, запущен ли NestJS на порту 3000)');
   }
+
+  if (!response.ok) {
+    const errMsg = await extractBackendError(response, 'Ошибка при проверке правила');
+    throw new Error(errMsg);
+  }
+
+  return await response.json();
 }
 
-// POST /api/catalog
+// 2. GET /api/catalog
+export async function fetchCatalogFromBackend(): Promise<SavedMatrixSystem[]> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_URL}/catalog`);
+  } catch {
+    throw new Error('Не удалось подключиться к бэкенду (http://localhost:3000/api/catalog)');
+  }
+
+  if (!res.ok) {
+    const errMsg = await extractBackendError(res, 'Ошибка загрузки каталога матриц');
+    throw new Error(errMsg);
+  }
+
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+// 3. POST /api/catalog
 export async function saveSystemToBackend(
   name: string,
   sheets: ParsedMatrixSheet[]
 ): Promise<SavedMatrixSystem> {
-  const sysId = `sys_${Date.now()}`;
   const cleanName = (name || 'Матрица').trim();
 
-  const normalizedSheets: ParsedMatrixSheet[] = sheets
-    .filter((sh) => Array.isArray(sh.rows) && sh.rows.length > 0)
-    .map((sh) => ({
-      ...sh,
-      rows: sh.rows.map((r, i) => ({
-        ...r,
-        __id: `${sysId}_${sh.sheetName}_${r.__rowNumber || i + 1}`,
-        __systemId: sysId,
-        __systemName: cleanName,
-        __sheetName: sh.sheetName,
-      })),
-    }));
-
+  let res: Response;
   try {
-    const res = await fetch(`${API_BASE_URL}/catalog`, {
+    res = await fetch(`${API_BASE_URL}/catalog`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: cleanName, sheets: normalizedSheets }),
+      body: JSON.stringify({ name: cleanName, sheets }),
     });
-
-    if (res.ok) {
-      const saved: SavedMatrixSystem = await res.json();
-      return saved;
-    }
-  } catch (err) {
-    console.warn('Не удалось отправить на бэкенд, сохранено локально:', err);
+  } catch {
+    throw new Error('Не удалось сохранить матрицу: сервер бэкенда недоступен');
   }
 
-  // Если бэкенд недоступен, сохраняем локально
-  const current = await fetchCatalogFromBackend();
-  const record: SavedMatrixSystem = {
-    id: sysId,
-    name: cleanName,
-    updatedAt: new Date().toLocaleString('ru-RU'),
-    sheets: normalizedSheets,
-  };
-  const next = [...current.filter((c) => c.name.toLowerCase() !== cleanName.toLowerCase()), record];
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  return record;
+  if (!res.ok) {
+    const errMsg = await extractBackendError(res, 'Ошибка при сохранении матрицы');
+    throw new Error(errMsg);
+  }
+
+  return await res.json();
 }
 
-// DELETE /api/catalog/:id
+// 4. DELETE /api/catalog/:id
 export async function deleteSystemFromBackend(id: string): Promise<void> {
+  let res: Response;
   try {
-    await fetch(`${API_BASE_URL}/catalog/${id}`, { method: 'DELETE' });
-  } catch {}
-  const current = await fetchCatalogFromBackend();
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify(current.filter((c) => c.id !== id))
-  );
+    res = await fetch(`${API_BASE_URL}/catalog/${id}`, { method: 'DELETE' });
+  } catch {
+    throw new Error('Не удалось удалить матрицу: сервер бэкенда недоступен');
+  }
+
+  if (!res.ok) {
+    const errMsg = await extractBackendError(res, 'Ошибка при удалении матрицы');
+    throw new Error(errMsg);
+  }
 }
 
 export function exportMatrixToExcel(sheet: ParsedMatrixSheet, fileNamePrefix = 'Отчет') {
@@ -221,6 +185,8 @@ export function exportMatrixToExcel(sheet: ParsedMatrixSheet, fileNamePrefix = '
           ? `Доступен (${open}/${total})`
           : row.checkStatus === 'blocked'
           ? `Закрыт (0/${total})`
+          : row.checkStatus === 'error'
+          ? `Ошибка (${row.errorMessage || 'Сбой запроса'})`
           : row.checkStatus === 'untestable'
           ? 'Недоступно для проверки'
           : 'Не проверен',

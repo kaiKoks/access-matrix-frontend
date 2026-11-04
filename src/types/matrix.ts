@@ -3,6 +3,7 @@ export type NetworkCheckStatus =
   | 'checking'
   | 'accessible'
   | 'blocked'
+  | 'error'
   | 'untestable';
 
 export interface SocketCheckItem {
@@ -43,6 +44,7 @@ export interface DynamicMatrixRow {
   checkStatus: NetworkCheckStatus;
   socketResults?: SocketCheckItem[];
   checkLog?: string;
+  errorMessage?: string;
   lastCheckedAt?: string;
 }
 

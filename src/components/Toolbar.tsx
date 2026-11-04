@@ -402,7 +402,7 @@ export const Toolbar: React.FC = () => {
               ) : (
                 <>
                   <Save className="w-3.5 h-3.5" />
-                  {saveMutation.isPending ? 'Сохранение...' : 'Сохранить на бэк'}
+                  {saveMutation.isPending ? 'Сохранение...' : 'Сохранить'}
                 </>
               )}
             </button>

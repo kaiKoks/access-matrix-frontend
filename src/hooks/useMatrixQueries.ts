@@ -3,7 +3,7 @@ import {
   fetchCatalogFromBackend,
   saveSystemToBackend,
   deleteSystemFromBackend,
-  simulateNetworkCheck,
+  checkRuleOnBackend,
 } from '@/services/networkTester';
 import { useMatrixStore } from '@/store/useMatrixStore';
 import type { DynamicMatrixRow, ParsedMatrixSheet, SavedMatrixSystem } from '@/types/matrix';
@@ -14,17 +14,19 @@ export function useCatalogQuery() {
   return useQuery({
     queryKey: CATALOG_QUERY_KEY,
     queryFn: fetchCatalogFromBackend,
+    retry: 1,
   });
 }
 
-// Сохранение открытой матрицы на бэкенд по кнопке "Сохранить на бэк"
 export function useSaveSystemMutation() {
   const queryClient = useQueryClient();
   const selectSystem = useMatrixStore((s) => s.selectSystem);
   const clearDraft = useMatrixStore((s) => s.clearDraft);
+  const setUiError = useMatrixStore((s) => s.setUiError);
 
   return useMutation({
     mutationFn: async ({ name, sheets }: { name: string; sheets: ParsedMatrixSheet[] }) => {
+      setUiError(null);
       return await saveSystemToBackend(name, sheets);
     },
     onSuccess: (savedSystem: SavedMatrixSystem) => {
@@ -39,15 +41,20 @@ export function useSaveSystemMutation() {
       clearDraft();
       selectSystem(savedSystem.id);
     },
+    onError: (err: Error) => {
+      setUiError(err.message);
+    },
   });
 }
 
 export function useDeleteSystemMutation() {
   const queryClient = useQueryClient();
   const selectSystem = useMatrixStore((s) => s.selectSystem);
+  const setUiError = useMatrixStore((s) => s.setUiError);
 
   return useMutation({
     mutationFn: async (id: string) => {
+      setUiError(null);
       await deleteSystemFromBackend(id);
       return id;
     },
@@ -57,6 +64,9 @@ export function useDeleteSystemMutation() {
       );
       selectSystem('ALL');
     },
+    onError: (err: Error) => {
+      setUiError(err.message);
+    },
   });
 }
 
@@ -65,10 +75,8 @@ function updateRowAcrossState(
   rowId: string,
   updater: (row: DynamicMatrixRow) => DynamicMatrixRow
 ) {
-  // 1. Обновляем в локально открытой матрице (если не сохранена на бэк)
   useMatrixStore.getState().updateDraftRow(rowId, updater);
 
-  // 2. Обновляем в кэше каталога TanStack Query
   queryClient.setQueryData<SavedMatrixSystem[]>(CATALOG_QUERY_KEY, (old) => {
     if (!old) return old;
     return old.map((sys) => ({
@@ -86,23 +94,45 @@ export function useCheckRowMutation() {
 
   return useMutation({
     mutationFn: async (row: DynamicMatrixRow) => {
+      const mode = useMatrixStore.getState().checkerMode;
+      useMatrixStore.getState().setUiError(null);
+
       updateRowAcrossState(queryClient, row.__id, (r) => ({
         ...r,
         checkStatus: 'checking',
+        errorMessage: undefined,
       }));
 
-      const result = await simulateNetworkCheck(row);
-      const checkedAt = result.checkedAt || new Date().toLocaleTimeString();
+      try {
+        const result = await checkRuleOnBackend(row, mode);
+        const checkedAt = result.checkedAt || new Date().toLocaleTimeString();
 
-      updateRowAcrossState(queryClient, row.__id, (r) => ({
-        ...r,
-        checkStatus: result.status,
-        socketResults: result.socketResults,
-        checkLog: result.log,
-        lastCheckedAt: checkedAt,
-      }));
+        updateRowAcrossState(queryClient, row.__id, (r) => ({
+          ...r,
+          checkStatus: result.status,
+          socketResults: result.socketResults,
+          checkLog: result.log,
+          errorMessage: undefined,
+          lastCheckedAt: checkedAt,
+        }));
 
-      return result;
+        return result;
+      } catch (err: any) {
+        const errorMsg = err?.message || 'Неизвестная ошибка при проверке правила';
+        const checkedAt = new Date().toLocaleTimeString();
+
+        updateRowAcrossState(queryClient, row.__id, (r) => ({
+          ...r,
+          checkStatus: 'error',
+          socketResults: [],
+          errorMessage: errorMsg,
+          checkLog: `[${checkedAt}] ОШИБКА ВЫПОЛНЕНИЯ ЗАПРОСА (Режим: ${mode.toUpperCase()})\n${errorMsg}`,
+          lastCheckedAt: checkedAt,
+        }));
+
+        useMatrixStore.getState().setUiError(errorMsg);
+        throw err;
+      }
     },
   });
 }
@@ -115,7 +145,7 @@ export function useCheckBatchMutation() {
       const testable = rows.filter((r) => r.meta.isTestable);
       for (let i = 0; i < testable.length; i += 4) {
         const batch = testable.slice(i, i + 4);
-        await Promise.all(batch.map((r) => checkSingleRow(r)));
+        await Promise.allSettled(batch.map((r) => checkSingleRow(r)));
       }
     },
   });
