@@ -1,14 +1,27 @@
 import React from 'react';
 import type { NetworkCheckStatus, SocketCheckItem } from '@/types/matrix';
-import { CheckCircle2, XCircle, AlertCircle, Loader2, MinusCircle } from 'lucide-react';
+import {
+  CheckCircle2,
+  XCircle,
+  AlertCircle,
+  Loader2,
+  MinusCircle,
+  AlertTriangle,
+} from 'lucide-react';
 
 interface StatusBadgeProps {
   status: NetworkCheckStatus;
   reason?: string;
+  errorMessage?: string;
   socketResults?: SocketCheckItem[];
 }
 
-export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, reason, socketResults }) => {
+export const StatusBadge: React.FC<StatusBadgeProps> = ({
+  status,
+  reason,
+  errorMessage,
+  socketResults,
+}) => {
   const total = socketResults?.length || 0;
   const openCount = socketResults?.filter((s) => s.status === 'accessible').length || 0;
   const countLabel = total > 0 ? ` (${openCount}/${total})` : '';
@@ -32,6 +45,16 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, reason, socket
         >
           <XCircle className="w-3.5 h-3.5 shrink-0" />
           <span>Закрыт{countLabel}</span>
+        </span>
+      );
+    case 'error':
+      return (
+        <span
+          title={errorMessage || 'Ошибка при обращении к Zabbix API'}
+          className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/15 text-amber-400 border border-amber-500/30 cursor-help whitespace-nowrap"
+        >
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          <span>Ошибка API</span>
         </span>
       );
     case 'checking':

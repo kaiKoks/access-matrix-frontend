@@ -9,20 +9,31 @@ import { X, Play, Terminal, CheckCircle2, XCircle, Clock, ArrowRight } from 'luc
 export const RowDetailDrawer: React.FC = () => {
   const { data: catalog = [] } = useCatalogQuery();
   const checkRowMutation = useCheckRowMutation();
-  const { selectedRowId, setSelectedRowId } = useMatrixStore();
+  const { selectedRowId, draftSheets, setSelectedRowId, isEditMode } = useMatrixStore();
   const [comboFilter, setComboFilter] = useState<'all' | 'accessible' | 'blocked'>('all');
 
   let selectedRow: DynamicMatrixRow | null = null;
   if (selectedRowId) {
-    for (const sys of catalog) {
-      for (const sh of sys.sheets) {
-        const found = sh.rows.find((r) => r.__id === selectedRowId);
-        if (found) {
-          selectedRow = found;
-          break;
-        }
+    // 1. Сначала ищем в черновике / новой матрице (draftSheets)
+    for (const sh of draftSheets) {
+      const found = sh.rows.find((r) => r.__id === selectedRowId);
+      if (found) {
+        selectedRow = found;
+        break;
       }
-      if (selectedRow) break;
+    }
+    // 2. Если не нашли в черновике — ищем в сохраненном каталоге
+    if (!selectedRow) {
+      for (const sys of catalog) {
+        for (const sh of sys.sheets) {
+          const found = sh.rows.find((r) => r.__id === selectedRowId);
+          if (found) {
+            selectedRow = found;
+            break;
+          }
+        }
+        if (selectedRow) break;
+      }
     }
   }
 
@@ -37,6 +48,7 @@ export const RowDetailDrawer: React.FC = () => {
     if (comboFilter === 'all') return true;
     return r.status === comboFilter;
   });
+  if(isEditMode) return
 
   return (
     <div className="fixed inset-y-0 right-0 w-115 max-w-full bg-zinc-900 border-l border-zinc-800 shadow-2xl z-50 flex flex-col p-6">
@@ -73,6 +85,7 @@ export const RowDetailDrawer: React.FC = () => {
             <StatusBadge
               status={selectedRow.checkStatus}
               reason={selectedRow.meta.untestableReason}
+              errorMessage={selectedRow.errorMessage}
               socketResults={selectedRow.socketResults}
             />
             {selectedRow.lastCheckedAt && (
@@ -82,6 +95,15 @@ export const RowDetailDrawer: React.FC = () => {
             )}
           </div>
         </div>
+
+        {selectedRow.errorMessage && (
+          <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs leading-relaxed">
+            <strong className="block font-semibold text-rose-400 mb-0.5">
+              Ошибка выполнения запроса:
+            </strong>
+            {selectedRow.errorMessage}
+          </div>
+        )}
 
         <div>
           <div className="flex items-center justify-between mb-2">
@@ -93,28 +115,31 @@ export const RowDetailDrawer: React.FC = () => {
               <div className="flex items-center gap-1 text-[11px]">
                 <button
                   onClick={() => setComboFilter('all')}
-                  className={`px-2 py-0.5 rounded ${comboFilter === 'all'
+                  className={`px-2 py-0.5 rounded ${
+                    comboFilter === 'all'
                       ? 'bg-zinc-800 text-zinc-100'
                       : 'text-zinc-500 hover:text-zinc-300'
-                    }`}
+                  }`}
                 >
                   Все ({results.length})
                 </button>
                 <button
                   onClick={() => setComboFilter('accessible')}
-                  className={`px-2 py-0.5 rounded ${comboFilter === 'accessible'
+                  className={`px-2 py-0.5 rounded ${
+                    comboFilter === 'accessible'
                       ? 'bg-emerald-500/20 text-emerald-300'
                       : 'text-zinc-500 hover:text-zinc-300'
-                    }`}
+                  }`}
                 >
                   Открыты ({openCount})
                 </button>
                 <button
                   onClick={() => setComboFilter('blocked')}
-                  className={`px-2 py-0.5 rounded ${comboFilter === 'blocked'
+                  className={`px-2 py-0.5 rounded ${
+                    comboFilter === 'blocked'
                       ? 'bg-rose-500/20 text-rose-300'
                       : 'text-zinc-500 hover:text-zinc-300'
-                    }`}
+                  }`}
                 >
                   Закрыты ({blockedCount})
                 </button>
@@ -125,50 +150,50 @@ export const RowDetailDrawer: React.FC = () => {
           <div className="divide-y divide-zinc-800/70 bg-zinc-950 rounded-lg border border-zinc-800 max-h-80 overflow-y-auto text-xs font-mono">
             {results.length > 0
               ? filteredResults.map((s) => (
-                <div key={s.id} className="p-3 space-y-1.5 hover:bg-zinc-900/60 transition">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[10px]">
-                      {s.protocol} : {s.port}
-                    </span>
-                    {s.status === 'accessible' ? (
-                      <span className="text-emerald-400 flex items-center gap-1 font-sans font-medium">
-                        <CheckCircle2 className="w-3.5 h-3.5" /> Доступен (lastvalue: 1)
+                  <div key={s.id} className="p-3 space-y-1.5 hover:bg-zinc-900/60 transition">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[10px]">
+                        {s.protocol} : {s.port}
                       </span>
-                    ) : (
-                      <span className="text-rose-400 flex items-center gap-1 font-sans font-medium">
-                        <XCircle className="w-3.5 h-3.5" /> Закрыт (lastvalue: 0)
+                      {s.status === 'accessible' ? (
+                        <span className="text-emerald-400 flex items-center gap-1 font-sans font-medium">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Доступен (lastvalue: 1)
+                        </span>
+                      ) : (
+                        <span className="text-rose-400 flex items-center gap-1 font-sans font-medium">
+                          <XCircle className="w-3.5 h-3.5" /> Закрыт (lastvalue: 0)
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="text-zinc-300 break-all flex items-center gap-1.5 text-[11px]">
+                      <span className="text-zinc-400">{s.source}</span>
+                      <ArrowRight className="w-3 h-3 text-zinc-600 shrink-0" />
+                      <span className="text-zinc-100">{s.destination}</span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[10px] text-zinc-500 pt-1">
+                      <span>Ключ: {s.zabbixKey}</span>
+                      <span>
+                        lastclock: {new Date(s.lastclock * 1000).toLocaleTimeString()}
                       </span>
-                    )}
+                    </div>
                   </div>
-
-                  <div className="text-zinc-300 break-all flex items-center gap-1.5 text-[11px]">
-                    <span className="text-zinc-400">{s.source}</span>
-                    <ArrowRight className="w-3 h-3 text-zinc-600 shrink-0" />
-                    <span className="text-zinc-100">{s.destination}</span>
-                  </div>
-
-                  <div className="flex items-center justify-between text-[10px] text-zinc-500 pt-1">
-                    <span>Ключ: {s.zabbixKey}</span>
-                    <span>
-                      lastclock: {new Date(s.lastclock * 1000).toLocaleTimeString()}
-                    </span>
-                  </div>
-                </div>
-              ))
+                ))
               : previewCombinations.map((c) => (
-                <div key={c.id} className="p-3 space-y-1 text-zinc-400">
-                  <div className="flex items-center justify-between">
-                    <span className="text-zinc-300">
-                      {c.protocol} порт {c.port}
-                    </span>
-                    <span className="text-[10px] text-zinc-500">Ожидает опроса</span>
+                  <div key={c.id} className="p-3 space-y-1 text-zinc-400">
+                    <div className="flex items-center justify-between">
+                      <span className="text-zinc-300">
+                        {c.protocol} порт {c.port}
+                      </span>
+                      <span className="text-[10px] text-zinc-500">Ожидает опроса</span>
+                    </div>
+                    <div className="text-[11px] break-all">
+                      {c.source} → {c.destination}
+                    </div>
+                    <div className="text-[10px] text-zinc-600">Zabbix key: {c.zabbixKey}</div>
                   </div>
-                  <div className="text-[11px] break-all">
-                    {c.source} → {c.destination}
-                  </div>
-                  <div className="text-[10px] text-zinc-600">Zabbix key: {c.zabbixKey}</div>
-                </div>
-              ))}
+                ))}
           </div>
         </div>
 

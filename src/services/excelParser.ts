@@ -6,7 +6,7 @@ import type {
   ParsedNetworkMeta,
 } from '@/types/matrix';
 
-const DEFAULT_PORT_DICTIONARY: Record<string, string> = {
+export const DEFAULT_PORT_DICTIONARY: Record<string, string> = {
   '53': 'DNS',
   '88': 'Kerberos',
   '135': 'RPC',
@@ -23,7 +23,7 @@ const DEFAULT_PORT_DICTIONARY: Record<string, string> = {
 const SEMANTIC_PATTERNS: [DetectedColumn['semanticRole'], RegExp][] = [
   ['index', /^(№|п\/п|номер)/i],
   ['protocol', /протокол/i],
-  ['term', /(срок|период)/i],
+  ['term', /(срок|период|примечан)/i],
   ['source', /(source|сервера\/узла.*\(source\)|откуда|источник)/i],
   ['destination', /(destination|назначени|получател.*ip|куда)/i],
   ['port_udp', /\(udp\)|^udp$/i],
@@ -32,12 +32,143 @@ const SEMANTIC_PATTERNS: [DetectedColumn['semanticRole'], RegExp][] = [
   ['role', /(роль|сервис|наименование)/i],
 ];
 
+export function detectColumnSemanticRole(title: string): DetectedColumn['semanticRole'] {
+  for (const [role, regex] of SEMANTIC_PATTERNS) {
+    if (regex.test(title)) {
+      return role;
+    }
+  }
+  return 'other';
+}
+
 export function extractPortTokens(raw: string): string[] {
   return raw
     .replace(/\b(tcp|udp)\s*\/?\s*/gi, '')
     .split(/[,;\n]+/)
     .map((p) => p.trim())
     .filter((p) => /^\d+(\s*[–-]\s*\d+)?$/.test(p));
+}
+
+// Пересчитывает сетевые метаданные строки при ручном вводе или редактировании ячеек
+export function recomputeRowMeta(
+  rawValues: Record<string, string | number | null | undefined>,
+  columns: DetectedColumn[]
+): ParsedNetworkMeta {
+  let sourceVal = '';
+  let destVal = '';
+  let protoColVal = '';
+  const ports: ParsedNetworkMeta['ports'] = [];
+
+  columns.forEach((col) => {
+    if (col.semanticRole === 'protocol' && rawValues[col.key]) {
+      protoColVal = String(rawValues[col.key]).trim().toUpperCase();
+    }
+  });
+
+  columns.forEach((col) => {
+    const val = rawValues[col.key];
+    if (val === null || val === undefined || String(val).trim() === '' || String(val).trim() === '-') {
+      return;
+    }
+    const strVal = String(val).trim();
+
+    if (col.semanticRole === 'source') sourceVal = strVal;
+    if (col.semanticRole === 'destination') destVal = strVal;
+
+    if (col.semanticRole === 'port_tcp') {
+      const list = extractPortTokens(strVal);
+      if (list.length > 0) ports.push({ raw: strVal, list, protocol: 'TCP' });
+    }
+    if (col.semanticRole === 'port_udp') {
+      const list = extractPortTokens(strVal);
+      if (list.length > 0) ports.push({ raw: strVal, list, protocol: 'UDP' });
+    }
+    if (col.semanticRole === 'port') {
+      const list = extractPortTokens(strVal);
+      if (list.length > 0) {
+        const isUdp = /udp/i.test(strVal) || protoColVal === 'UDP';
+        ports.push({
+          raw: strVal,
+          list,
+          protocol: isUdp ? 'UDP' : 'TCP',
+        });
+      }
+    }
+  });
+
+  const isExternalSource = sourceVal.includes('10.132.');
+  const isOutbound = sourceVal.includes('10.194.') || sourceVal.includes('10.196.');
+  const isTestable = Boolean(sourceVal && destVal && ports.length > 0 && !isExternalSource);
+
+  return {
+    sources: sourceVal
+      ? sourceVal
+          .split(/[\n,;]+/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [],
+    destinations: destVal
+      ? destVal
+          .split(/[\n,;]+/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [],
+    ports,
+    isTestable,
+    untestableReason: isExternalSource
+      ? 'Хост-источник (10.132.x.x) находится во внешнем сегменте — нет прав администратора'
+      : !sourceVal || !destVal
+      ? 'Укажите Источник и Назначение'
+      : !ports.length
+      ? 'Не указаны порты для проверки'
+      : undefined,
+    direction: isExternalSource ? 'inbound' : isOutbound ? 'outbound' : 'internal',
+  };
+}
+
+// Создает пустой лист матрицы для заполнения с нуля прямо в программе
+export function createBlankMatrixSheet(sheetName = 'Основной'): ParsedMatrixSheet {
+  const columns: DetectedColumn[] = [
+    { key: 'col_0', headerTitle: 'Функциональная роль / Сервис', semanticRole: 'role' },
+    { key: 'col_1', headerTitle: 'Источник (Source IP / DNS)', semanticRole: 'source' },
+    { key: 'col_2', headerTitle: 'Назначение (Destination IP / DNS)', semanticRole: 'destination' },
+    { key: 'col_3', headerTitle: 'Порт (TCP)', semanticRole: 'port_tcp' },
+    { key: 'col_4', headerTitle: 'Порт (UDP)', semanticRole: 'port_udp' },
+    { key: 'col_5', headerTitle: 'Примечание', semanticRole: 'term' },
+  ];
+
+  const initialRaw: Record<string, string> = {
+    col_0: 'Тестовый сервис',
+    col_1: '10.194.199.68',
+    col_2: '10.194.199.11',
+    col_3: '389, 445',
+    col_4: '53',
+    col_5: 'Постоянно',
+  };
+
+  const meta = recomputeRowMeta(initialRaw, columns);
+
+  const firstRow: DynamicMatrixRow = {
+    __id: `draft_${sheetName}_1_${Date.now()}`,
+    __rowNumber: 1,
+    __systemId: 'DRAFT',
+    __systemName: 'Новая матрица',
+    __sheetName: sheetName,
+    rawValues: initialRaw,
+    meta,
+    checkStatus: meta.isTestable ? 'idle' : 'untestable',
+  };
+
+  return {
+    sheetName,
+    columns,
+    rows: [firstRow],
+    portDictionary: { ...DEFAULT_PORT_DICTIONARY },
+    stats: {
+      totalRows: 1,
+      testableRows: meta.isTestable ? 1 : 0,
+    },
+  };
 }
 
 function fillMergedCells(rawData: any[][], merges: XLSX.Range[] = []) {
@@ -96,7 +227,6 @@ export async function parseExcelMatrix(file: File): Promise<ParsedMatrixSheet[]>
 
   for (const sheetName of matrixSheetNames) {
     const worksheet = workbook.Sheets[sheetName];
-    // ВАЖНО: blankrows: true сохраняет физические индексы строк для корректной работы !merges
     const rawData: any[][] = XLSX.utils.sheet_to_json(worksheet, {
       header: 1,
       defval: null,
@@ -145,18 +275,10 @@ export async function parseExcelMatrix(file: File): Promise<ParsedMatrixSheet[]>
 
       if (!title) continue;
 
-      let role: DetectedColumn['semanticRole'] = 'other';
-      for (const [r, regex] of SEMANTIC_PATTERNS) {
-        if (regex.test(title)) {
-          role = r;
-          break;
-        }
-      }
-
       columns.push({
         key: `col_${colIdx}`,
         headerTitle: title,
-        semanticRole: role,
+        semanticRole: detectColumnSemanticRole(title),
       });
     }
 
@@ -212,72 +334,15 @@ export async function parseExcelMatrix(file: File): Promise<ParsedMatrixSheet[]>
       }
       prevRowCache = { ...rawValues };
 
-      let sourceVal = '';
-      let destVal = '';
-      let protoColVal = '';
-      const ports: ParsedNetworkMeta['ports'] = [];
-
-      columns.forEach((col) => {
-        if (col.semanticRole === 'protocol' && rawValues[col.key]) {
-          protoColVal = String(rawValues[col.key]).trim().toUpperCase();
-        }
-      });
-
-      columns.forEach((col) => {
-        const val = rawValues[col.key];
-        if (!val || String(val).trim() === '-') return;
-        const strVal = String(val).trim();
-
-        if (col.semanticRole === 'source') sourceVal = strVal;
-        if (col.semanticRole === 'destination') destVal = strVal;
-
-        if (col.semanticRole === 'port_tcp') {
-          const list = extractPortTokens(strVal);
-          if (list.length > 0) ports.push({ raw: strVal, list, protocol: 'TCP' });
-        }
-        if (col.semanticRole === 'port_udp') {
-          const list = extractPortTokens(strVal);
-          if (list.length > 0) ports.push({ raw: strVal, list, protocol: 'UDP' });
-        }
-        if (col.semanticRole === 'port') {
-          const list = extractPortTokens(strVal);
-          if (list.length > 0) {
-            const isUdp = /udp/i.test(strVal) || protoColVal === 'UDP';
-            ports.push({
-              raw: strVal,
-              list,
-              protocol: isUdp ? 'UDP' : 'TCP',
-            });
-          }
-        }
-      });
-
-      const isExternalSource = sourceVal.includes('10.132.');
-      const isOutbound = sourceVal.includes('10.194.') || sourceVal.includes('10.196.');
-      const isTestable = Boolean(sourceVal && destVal && ports.length > 0 && !isExternalSource);
+      const meta = recomputeRowMeta(rawValues, columns);
 
       rows.push({
         __id: `row_${sheetName}_${rows.length + 1}`,
         __rowNumber: rows.length + 1,
         __sectionTitle: currentSectionTitle,
         rawValues,
-        meta: {
-          sources: sourceVal
-            ? sourceVal.split(/[\n,;]+/).map((s) => s.trim()).filter(Boolean)
-            : [],
-          destinations: destVal
-            ? destVal.split(/[\n,;]+/).map((s) => s.trim()).filter(Boolean)
-            : [],
-          ports,
-          isTestable,
-          untestableReason: isExternalSource
-            ? 'Хост-источник (10.132.x.x) находится во внешнем сегменте — нет прав администратора'
-            : !ports.length
-            ? 'Не указаны порты для проверки'
-            : undefined,
-          direction: isExternalSource ? 'inbound' : isOutbound ? 'outbound' : 'internal',
-        },
-        checkStatus: isTestable ? 'idle' : 'untestable',
+        meta,
+        checkStatus: meta.isTestable ? 'idle' : 'untestable',
       });
     }
 

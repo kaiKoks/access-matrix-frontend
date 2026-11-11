@@ -16,7 +16,7 @@ const queryClient = new QueryClient({
 export const App: React.FC = () => {
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans selection:bg-blue-600 selection:text-white">
+      <div className="h-screen overflow-hidden bg-zinc-950 text-zinc-100 flex flex-col font-sans selection:bg-blue-600 selection:text-white">
         <main className="flex-1 flex flex-col overflow-hidden">
           <Toolbar />
           <MatrixTable />
