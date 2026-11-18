@@ -13,6 +13,7 @@ import type {
   ParsedMatrixSheet,
   MatrixViewGroup,
   DetectedColumn,
+  DynamicMatrixRow,
 } from '@/types/matrix';
 import {
   Upload,
@@ -29,33 +30,286 @@ import {
   X,
   FilePlus2,
   Pencil,
-  Filter,
+  SlidersHorizontal,
 } from 'lucide-react';
 
 export function formatMatrixTag(name: string): string {
   return name.trim().replace(/\s+/g, '_');
 }
 
-export function parseSearchInput(rawQuery: string): { matrixTags: string[]; textQuery: string } {
+export interface ColumnRuleToken {
+  raw: string;
+  target:
+    | 'source'
+    | 'destination'
+    | 'port_any'
+    | 'port_tcp'
+    | 'port_udp'
+    | 'role'
+    | 'protocol'
+    | 'term'
+    | 'index'
+    | 'custom'
+    | 'text';
+  customHeader?: string;
+  values: string[];
+  negated: boolean;
+}
+
+const ROLE_ALIASES: Record<string, ColumnRuleToken['target']> = {
+  src: 'source',
+  source: 'source',
+  from: 'source',
+  ист: 'source',
+  источник: 'source',
+  откуда: 'source',
+
+  dst: 'destination',
+  dest: 'destination',
+  destination: 'destination',
+  to: 'destination',
+  назн: 'destination',
+  назначение: 'destination',
+  куда: 'destination',
+
+  port: 'port_any',
+  ports: 'port_any',
+  порт: 'port_any',
+  порты: 'port_any',
+  tcp: 'port_tcp',
+  udp: 'port_udp',
+
+  role: 'role',
+  роль: 'role',
+
+  proto: 'protocol',
+  service: 'protocol',
+  протокол: 'protocol',
+  сервис: 'protocol',
+
+  term: 'term',
+  срок: 'term',
+
+  id: 'index',
+  row: 'index',
+  строка: 'index',
+};
+
+function splitSearchTokens(rawQuery: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < rawQuery.length; i++) {
+    const ch = rawQuery[i];
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      current += ch;
+    } else if (/\s/.test(ch) && !inQuotes) {
+      if (current.trim()) {
+        result.push(current.trim());
+        current = '';
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) result.push(current.trim());
+  return result;
+}
+
+function cleanQuotes(s: string): string {
+  return s.replace(/^["']+|["']+$/g, '').trim();
+}
+
+export function parseSearchInput(rawQuery: string): {
+  matrixTags: string[];
+  textQuery: string;
+  rules: ColumnRuleToken[];
+} {
   const matrixTags: string[] = [];
+  const rules: ColumnRuleToken[] = [];
   const textParts: string[] = [];
 
-  rawQuery
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .forEach((token) => {
-      if (token.startsWith('@') && token.length > 1) {
-        matrixTags.push(token.slice(1).toLowerCase().replace(/_/g, ' '));
-      } else if (token !== '@') {
-        textParts.push(token);
+  for (const rawToken of splitSearchTokens(rawQuery)) {
+    let working = rawToken;
+    let negated = false;
+
+    if ((working.startsWith('-') || working.startsWith('!')) && working.length > 1) {
+      negated = true;
+      working = working.slice(1);
+    }
+
+    if (working.startsWith('@') && working.length > 1) {
+      matrixTags.push(cleanQuotes(working.slice(1)).toLowerCase().replace(/_/g, ' '));
+      continue;
+    }
+
+    if (working === '@') continue;
+
+    if (working.startsWith('#') && /^#\d+$/.test(working)) {
+      rules.push({
+        raw: rawToken,
+        target: 'index',
+        values: [working.slice(1)],
+        negated,
+      });
+      continue;
+    }
+
+    const colonIdx = working.indexOf(':');
+    if (colonIdx > 0) {
+      const key = cleanQuotes(working.slice(0, colonIdx)).toLowerCase();
+      const valRaw = cleanQuotes(working.slice(colonIdx + 1)).toLowerCase();
+
+      if (valRaw) {
+        const values = valRaw
+          .split(',')
+          .map((v) => cleanQuotes(v))
+          .filter(Boolean);
+
+        if (values.length > 0) {
+          const mappedTarget = ROLE_ALIASES[key];
+          if (mappedTarget) {
+            rules.push({
+              raw: rawToken,
+              target: mappedTarget,
+              values,
+              negated,
+            });
+          } else {
+            rules.push({
+              raw: rawToken,
+              target: 'custom',
+              customHeader: key,
+              values,
+              negated,
+            });
+          }
+          textParts.push(rawToken);
+          continue;
+        }
       }
-    });
+    }
+
+    const word = cleanQuotes(working).toLowerCase();
+    if (word) {
+      rules.push({
+        raw: rawToken,
+        target: 'text',
+        values: [word],
+        negated,
+      });
+      textParts.push(word);
+    }
+  }
 
   return {
     matrixTags,
     textQuery: textParts.join(' ').toLowerCase(),
+    rules,
   };
+}
+
+function matchesPortValue(cellOrToken: string, queryPort: string): boolean {
+  const clean = cellOrToken.toLowerCase().trim();
+  if (clean.includes(queryPort)) return true;
+
+  if (/^\d+$/.test(queryPort)) {
+    const portNum = Number(queryPort);
+    const rangeRegex = /(\d+)\s*[–-]\s*(\d+)/g;
+    let match: RegExpExecArray | null;
+    while ((match = rangeRegex.exec(clean)) !== null) {
+      const start = Number(match[1]);
+      const end = Number(match[2]);
+      if (portNum >= Math.min(start, end) && portNum <= Math.max(start, end)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function matchRuleOnRow(
+  rule: ColumnRuleToken,
+  row: DynamicMatrixRow,
+  sheet: ParsedMatrixSheet,
+  sysName: string
+): boolean {
+  const anyValueMatches = (check: (v: string) => boolean) => rule.values.some(check);
+
+  switch (rule.target) {
+    case 'index': {
+      const rowNum = String(row.__rowNumber);
+      const indexCols = sheet.columns
+        .filter((c) => c.semanticRole === 'index')
+        .map((c) => String(row.rawValues[c.key] ?? '').toLowerCase());
+      return anyValueMatches((v) => rowNum === v || indexCols.some((c) => c.includes(v)));
+    }
+
+    case 'source':
+    case 'destination':
+    case 'role':
+    case 'protocol':
+    case 'term': {
+      const matchingCols = sheet.columns.filter((c) => c.semanticRole === rule.target);
+      return anyValueMatches((v) =>
+        matchingCols.some((c) =>
+          String(row.rawValues[c.key] ?? '')
+            .toLowerCase()
+            .includes(v)
+        )
+      );
+    }
+
+    case 'port_any':
+    case 'port_tcp':
+    case 'port_udp': {
+      const allowedRoles =
+        rule.target === 'port_tcp'
+          ? ['port_tcp', 'port']
+          : rule.target === 'port_udp'
+          ? ['port_udp', 'port']
+          : ['port_tcp', 'port_udp', 'port'];
+
+      const matchingCols = sheet.columns.filter((c) =>
+        allowedRoles.includes(c.semanticRole)
+      );
+      return anyValueMatches((v) =>
+        matchingCols.some((c) => matchesPortValue(String(row.rawValues[c.key] ?? ''), v))
+      );
+    }
+
+    case 'custom': {
+      const headerQuery = rule.customHeader || '';
+      const matchingCols = sheet.columns.filter(
+        (c) =>
+          c.headerTitle.toLowerCase().includes(headerQuery) ||
+          c.key.toLowerCase() === headerQuery
+      );
+      return anyValueMatches((v) =>
+        matchingCols.some((c) =>
+          String(row.rawValues[c.key] ?? '')
+            .toLowerCase()
+            .includes(v)
+        )
+      );
+    }
+
+    case 'text':
+    default: {
+      return anyValueMatches((v) => {
+        const inValues = Object.values(row.rawValues).some((cell) =>
+          String(cell ?? '').toLowerCase().includes(v)
+        );
+        const inSection = String(row.__sectionTitle ?? '')
+          .toLowerCase()
+          .includes(v);
+        const inSys = sysName.toLowerCase().includes(v);
+        return inValues || inSection || inSys;
+      });
+    }
+  }
 }
 
 export interface BuildGroupsParams {
@@ -65,7 +319,7 @@ export interface BuildGroupsParams {
   draftSheets: ParsedMatrixSheet[];
   activeSheetIndex: number;
   searchQuery: string;
-  columnFilter: string;
+  columnFilter?: string;
   statusFilter: string;
 }
 
@@ -76,49 +330,20 @@ export function buildVisibleMatrixGroups({
   draftSheets,
   activeSheetIndex,
   searchQuery,
-  columnFilter,
   statusFilter,
 }: BuildGroupsParams): MatrixViewGroup[] {
-  const { matrixTags, textQuery } = parseSearchInput(searchQuery);
+  const { matrixTags, textQuery, rules } = parseSearchInput(searchQuery);
   const isMultiMode = activeSystemId === 'ALL' || matrixTags.length > 0;
 
   const filterRows = (sheet: ParsedMatrixSheet, sysName: string) =>
     sheet.rows.filter((row) => {
       if (statusFilter !== 'all' && row.checkStatus !== statusFilter) return false;
-      if (!textQuery) return true;
+      if (rules.length === 0) return true;
 
-      // Фильтрация по конкретному выбранному столбцу или семантической роли
-      if (columnFilter && columnFilter !== 'ALL') {
-        if (columnFilter.startsWith('ROLE:')) {
-          const targetRole = columnFilter.replace('ROLE:', '');
-          const matchingCols = sheet.columns.filter((c) => c.semanticRole === targetRole);
-          return matchingCols.some((c) =>
-            String(row.rawValues[c.key] ?? '')
-              .toLowerCase()
-              .includes(textQuery)
-          );
-        }
-
-        const targetCol = sheet.columns.find(
-          (c) => c.key === columnFilter || c.headerTitle === columnFilter
-        );
-        if (targetCol) {
-          return String(row.rawValues[targetCol.key] ?? '')
-            .toLowerCase()
-            .includes(textQuery);
-        }
-        return false;
-      }
-
-      // Поиск по всем столбцам
-      const inValues = Object.values(row.rawValues).some((v) =>
-        String(v ?? '').toLowerCase().includes(textQuery)
-      );
-      const inSection = String(row.__sectionTitle ?? '')
-        .toLowerCase()
-        .includes(textQuery);
-      const inSys = sysName.toLowerCase().includes(textQuery);
-      return inValues || inSection || inSys;
+      return rules.every((rule) => {
+        const matched = matchRuleOnRow(rule, row, sheet, sysName);
+        return rule.negated ? !matched : matched;
+      });
     });
 
   if (!isMultiMode) {
@@ -183,10 +408,21 @@ export function buildVisibleMatrixGroups({
   return groups;
 }
 
+const SYNTAX_SHORTCUTS: Array<{ token: string; label: string; example: string }> = [
+  { token: 'src:', label: 'Источник (Source)', example: 'src:10.194' },
+  { token: 'dst:', label: 'Назначение (Dest)', example: 'dst:sber' },
+  { token: 'tcp:', label: 'Порт TCP (и диапазоны)', example: 'tcp:443,8080' },
+  { token: 'udp:', label: 'Порт UDP', example: 'udp:53' },
+  { token: 'port:', label: 'Любой порт', example: 'port:3000' },
+  { token: 'role:', label: 'Роль / Сервис', example: 'role:сервер' },
+  { token: '-port:', label: 'Исключить (-)', example: '-port:53' },
+];
+
 export const Toolbar: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const mentionMenuRef = useRef<HTMLDivElement>(null);
+  const syntaxMenuRef = useRef<HTMLDivElement>(null);
 
   const [justSaved, setJustSaved] = useState(false);
 
@@ -194,6 +430,7 @@ export const Toolbar: React.FC = () => {
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionStartPos, setMentionStartPos] = useState<number>(0);
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
+  const [syntaxHelpOpen, setSyntaxHelpOpen] = useState(false);
 
   const { data: catalog = [] } = useCatalogQuery();
   const saveMutation = useSaveSystemMutation();
@@ -217,7 +454,6 @@ export const Toolbar: React.FC = () => {
     selectSystem,
     setActiveSheetIndex,
     setSearchQuery,
-    setColumnFilter,
     setStatusFilter,
     setIsEditMode,
     setUiError,
@@ -244,7 +480,6 @@ export const Toolbar: React.FC = () => {
   const allVisibleRows = visibleGroups.flatMap((g) => g.rows);
   const testableCount = allVisibleRows.filter((r) => r.meta.isTestable).length;
 
-  // Собираем список доступных столбцов для селектора фильтрации
   const availableColumns: DetectedColumn[] = [];
   const seenTitles = new Set<string>();
   visibleGroups.forEach((g) => {
@@ -267,13 +502,22 @@ export const Toolbar: React.FC = () => {
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
       if (
         mentionMenuRef.current &&
-        !mentionMenuRef.current.contains(e.target as Node) &&
+        !mentionMenuRef.current.contains(target) &&
         searchInputRef.current &&
-        !searchInputRef.current.contains(e.target as Node)
+        !searchInputRef.current.contains(target)
       ) {
         setMentionOpen(false);
+      }
+      if (
+        syntaxMenuRef.current &&
+        !syntaxMenuRef.current.contains(target) &&
+        searchInputRef.current &&
+        !searchInputRef.current.contains(target)
+      ) {
+        setSyntaxHelpOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -329,6 +573,7 @@ export const Toolbar: React.FC = () => {
     if (match) {
       const atIndex = textBeforeCursor.lastIndexOf('@');
       setMentionOpen(true);
+      setSyntaxHelpOpen(false);
       setMentionQuery(match[1]);
       setMentionStartPos(atIndex);
       setSelectedIndex(0);
@@ -358,8 +603,26 @@ export const Toolbar: React.FC = () => {
     }, 0);
   };
 
+  const insertSyntaxToken = (token: string) => {
+    const input = searchInputRef.current;
+    const trimmed = searchQuery.trimEnd();
+    const nextValue = trimmed ? `${trimmed} ${token}` : token;
+    setSearchQuery(nextValue);
+    setSyntaxHelpOpen(false);
+
+    setTimeout(() => {
+      if (input) {
+        input.focus();
+        input.setSelectionRange(nextValue.length, nextValue.length);
+      }
+    }, 0);
+  };
+
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!mentionOpen || filteredMentions.length === 0) return;
+    if (!mentionOpen || filteredMentions.length === 0) {
+      if (e.key === 'Escape') setSyntaxHelpOpen(false);
+      return;
+    }
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -506,57 +769,105 @@ export const Toolbar: React.FC = () => {
           )}
         </div>
 
-        {/* Правая часть:  фильтр по столбцу, поиск, статус и экспорт */}
+        {/* Правая часть: умный поиск по столбцам, статус и экспорт */}
         <div className="flex items-center gap-2 w-full xl:w-auto justify-end flex-wrap">
-
-
-          {/* Выбор столбца для фильтрации */}
-          <div className="flex items-center gap-1.5 bg-zinc-950 px-2.5 py-1.5 rounded-lg border border-zinc-800 text-xs">
-            <Filter className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
-            <select
-              value={columnFilter}
-              onChange={(e) => setColumnFilter(e.target.value)}
-              className="bg-zinc-950 text-zinc-200 focus:outline-none cursor-pointer max-w-44 truncate"
-              title="Выберите столбец для поиска"
-            >
-              <option value="ALL">Все столбцы</option>
-              <option value="ROLE:source">Только Источник (Source)</option>
-              <option value="ROLE:destination">Только Назначение (Dest)</option>
-              <option value="ROLE:port_tcp">Только Порт (TCP)</option>
-              <option value="ROLE:port_udp">Только Порт (UDP)</option>
-              <option value="ROLE:role">Только Роль / Сервис</option>
-              {availableColumns.map((col) => (
-                <option key={col.headerTitle} value={col.headerTitle}>
-                  Столбец: {col.headerTitle}
-                </option>
-              ))}
-            </select>
-          </div>
-
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-2 text-zinc-500 pointer-events-none" />
             <input
               ref={searchInputRef}
               type="text"
-              placeholder={
-                columnFilter === 'ALL'
-                  ? 'Поиск или @матрица...'
-                  : 'Фильтр по выбранному столбцу...'
-              }
+              placeholder="Поиск: src:10.194 dst:sber tcp:443 @матрица..."
               value={searchQuery}
               onChange={handleSearchChange}
               onKeyDown={handleSearchKeyDown}
-              className="pl-9 pr-7 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-blue-500 w-56"
+              className="pl-9 pr-14 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-blue-500 w-80 font-mono"
             />
-            {searchQuery && (
+
+            <div className="absolute right-2 top-1.5 flex items-center gap-1">
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="p-0.5 text-zinc-500 hover:text-zinc-300"
+                  title="Очистить поиск"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
               <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2 top-2 text-zinc-500 hover:text-zinc-300"
+                type="button"
+                onClick={() => {
+                  setSyntaxHelpOpen((prev) => !prev);
+                  setMentionOpen(false);
+                }}
+                title="Фильтры по столбцам (src:, dst:, tcp:, udp:, role:)"
+                className={`p-0.5 rounded transition ${
+                  syntaxHelpOpen
+                    ? 'text-blue-400 bg-blue-500/15'
+                    : 'text-zinc-500 hover:text-zinc-300'
+                }`}
               >
-                <X className="w-3.5 h-3.5" />
+                <SlidersHorizontal className="w-3.5 h-3.5" />
               </button>
+            </div>
+
+            {/* Меню быстрых префиксов столбцов */}
+            {syntaxHelpOpen && (
+              <div
+                ref={syntaxMenuRef}
+                className="absolute right-0 top-full mt-1.5 w-80 bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl z-50 p-2.5 space-y-2"
+              >
+                <div className="flex items-center justify-between text-[11px] text-zinc-400 border-b border-zinc-800 pb-1.5">
+                  <span className="font-medium text-zinc-200">Фильтр по столбцам</span>
+                  <span className="text-[10px] text-zinc-500 font-mono">
+                    , = ИЛИ &nbsp;|&nbsp; - = НЕ
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1">
+                  {SYNTAX_SHORTCUTS.map((item) => (
+                    <button
+                      key={item.token}
+                      type="button"
+                      onClick={() => insertSyntaxToken(item.token)}
+                      className="flex flex-col px-2 py-1.5 rounded bg-zinc-950 hover:bg-zinc-800 border border-zinc-800/80 text-left transition"
+                    >
+                      <span className="text-[11px] font-mono font-semibold text-blue-400">
+                        {item.token}
+                      </span>
+                      <span className="text-[10px] text-zinc-400 truncate">
+                        {item.label}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                {availableColumns.length > 0 && (
+                  <div className="pt-1 border-t border-zinc-800 space-y-1">
+                    <div className="text-[10px] text-zinc-500">Столбцы таблицы:</div>
+                    <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+                      {availableColumns.map((col) => {
+                        const shortHeader = col.headerTitle.split(/[\s(]/)[0];
+                        const prefix = `${shortHeader}:`;
+                        return (
+                          <button
+                            key={col.headerTitle}
+                            type="button"
+                            onClick={() => insertSyntaxToken(prefix)}
+                            className="px-2 py-0.5 rounded bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-[10px] text-zinc-300 truncate max-w-full transition"
+                            title={`Искать в столбце «${col.headerTitle}»`}
+                          >
+                            {col.headerTitle}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
 
+            {/* Меню выбора @матрицы */}
             {mentionOpen && (
               <div
                 ref={mentionMenuRef}

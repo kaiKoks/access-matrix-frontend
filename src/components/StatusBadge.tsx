@@ -3,9 +3,9 @@ import type { NetworkCheckStatus, SocketCheckItem } from '@/types/matrix';
 import {
   CheckCircle2,
   XCircle,
-  AlertCircle,
   Loader2,
-  MinusCircle,
+  Clock,
+  Ban,
   AlertTriangle,
 } from 'lucide-react';
 
@@ -22,63 +22,64 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
   errorMessage,
   socketResults,
 }) => {
-  const total = socketResults?.length || 0;
-  const openCount = socketResults?.filter((s) => s.status === 'accessible').length || 0;
+  const testableResults =
+    socketResults?.filter((s) => s.status !== 'untestable') || [];
+  const total = testableResults.length;
+  const openCount = testableResults.filter((s) => s.status === 'accessible').length;
   const countLabel = total > 0 ? ` (${openCount}/${total})` : '';
 
   switch (status) {
+    case 'checking':
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-500/15 text-blue-300 border border-blue-500/30">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          Проверка...
+        </span>
+      );
+
     case 'accessible':
       return (
-        <span
-          title={`Доступно связок: ${openCount} из ${total}`}
-          className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 whitespace-nowrap"
-        >
-          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-          <span>Доступен{countLabel}</span>
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+          <CheckCircle2 className="w-3.5 h-3.5" />
+          Доступен{countLabel}
         </span>
       );
+
     case 'blocked':
       return (
-        <span
-          title={`Все проверенные связки (${total}) закрыты`}
-          className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20 whitespace-nowrap"
-        >
-          <XCircle className="w-3.5 h-3.5 shrink-0" />
-          <span>Закрыт{countLabel}</span>
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">
+          <XCircle className="w-3.5 h-3.5" />
+          Закрыт{countLabel}
         </span>
       );
+
     case 'error':
       return (
         <span
-          title={errorMessage || 'Ошибка при обращении к Zabbix API'}
-          className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/15 text-amber-400 border border-amber-500/30 cursor-help whitespace-nowrap"
+          title={errorMessage || 'Ошибка запроса к Zabbix API'}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30 cursor-help"
         >
-          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-          <span>Ошибка API</span>
+          <AlertTriangle className="w-3.5 h-3.5" />
+          Ошибка API
         </span>
       );
-    case 'checking':
-      return (
-        <span className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 whitespace-nowrap">
-          <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-          <span>Опрос...</span>
-        </span>
-      );
+
     case 'untestable':
       return (
         <span
-          title={reason || 'Проверка невозможна из текущего сетевого сегмента'}
-          className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700 cursor-help whitespace-nowrap"
+          title={reason || 'Автоматическая проверка недоступна'}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700 cursor-help"
         >
-          <MinusCircle className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
-          <span>Недоступно</span>
+          <Ban className="w-3.5 h-3.5" />
+          Недоступно
         </span>
       );
+
     default:
       return (
-        <span className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-zinc-800/60 text-zinc-400 border border-zinc-700/60 whitespace-nowrap">
-          <AlertCircle className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
-          <span>Не проверен</span>
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-zinc-800/70 text-zinc-400 border border-zinc-700/70">
+          <Clock className="w-3.5 h-3.5" />
+          Не проверялось
         </span>
       );
   }

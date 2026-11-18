@@ -125,7 +125,6 @@ function expandPortTokenPreview(token: string): string[] {
   return /^\d+$/.test(clean) ? [clean] : [];
 }
 
-// Формирует предпросмотр всех связок (включая 3 контрольные точки для широких диапазонов портов)
 export function buildAllSocketCombinations(row: DynamicMatrixRow): SocketCheckItem[] {
   const sources = row.meta.sources?.length ? row.meta.sources : ['LocalHost'];
   const destinations = row.meta.destinations?.length ? row.meta.destinations : ['Unknown'];
@@ -251,6 +250,9 @@ export function exportFilteredGroupsToExcel(
   });
 
   const dateStamp = new Date().toISOString().slice(0, 10);
-  const fileName = customFileName || `access_matrix_export_${dateStamp}.xlsx`;
+  const baseName = customFileName
+    ? `${customFileName.trim().replace(/\.xlsx?$/i, '')}_${dateStamp}`
+    : `access_matrix_export_${dateStamp}`;
+  const fileName = `${baseName.replace(/[\\/?*[\]:"|<>]+/g, '_')}.xlsx`;
   XLSX.writeFile(wb, fileName);
 }
