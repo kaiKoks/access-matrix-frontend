@@ -3,8 +3,8 @@ export type NetworkCheckStatus =
   | 'checking'
   | 'accessible'
   | 'blocked'
-  | 'error'
-  | 'untestable';
+  | 'untestable'
+  | 'error';
 
 export interface SocketCheckItem {
   id: string;
@@ -15,20 +15,38 @@ export interface SocketCheckItem {
   zabbixKey: string;
   lastvalue: '1' | '0';
   lastclock: number;
-  status: 'accessible' | 'blocked';
+  status: 'accessible' | 'blocked' | 'untestable';
+}
+
+export interface ParsedPortGroup {
+  raw: string;
+  list: string[];
+  protocol: 'TCP' | 'UDP';
 }
 
 export interface ParsedNetworkMeta {
   sources: string[];
   destinations: string[];
-  ports: {
-    list: string[];
-    raw: string;
-    protocol: 'TCP' | 'UDP';
-  }[];
+  ports: ParsedPortGroup[];
   isTestable: boolean;
   untestableReason?: string;
-  direction: 'outbound' | 'inbound' | 'internal';
+  direction?: 'inbound' | 'outbound' | 'internal';
+}
+
+export interface DetectedColumn {
+  key: string;
+  headerTitle: string;
+  semanticRole:
+    | 'index'
+    | 'protocol'
+    | 'term'
+    | 'source'
+    | 'destination'
+    | 'port_tcp'
+    | 'port_udp'
+    | 'port'
+    | 'role'
+    | 'other';
 }
 
 export interface DynamicMatrixRow {
@@ -38,30 +56,13 @@ export interface DynamicMatrixRow {
   __systemId?: string;
   __systemName?: string;
   __sheetName?: string;
-
-  rawValues: Record<string, string | number | null | undefined>;
+  rawValues: Record<string, any>;
   meta: ParsedNetworkMeta;
   checkStatus: NetworkCheckStatus;
   socketResults?: SocketCheckItem[];
   checkLog?: string;
   errorMessage?: string;
   lastCheckedAt?: string;
-}
-
-export interface DetectedColumn {
-  key: string;
-  headerTitle: string;
-  semanticRole:
-    | 'index'
-    | 'role'
-    | 'source'
-    | 'destination'
-    | 'port_tcp'
-    | 'port_udp'
-    | 'port'
-    | 'protocol'
-    | 'term'
-    | 'other';
 }
 
 export interface ParsedMatrixSheet {

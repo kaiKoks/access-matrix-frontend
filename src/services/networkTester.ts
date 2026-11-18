@@ -1,276 +1,256 @@
-import * as XLSX from "xlsx"
+import * as XLSX from 'xlsx';
 import type {
   DynamicMatrixRow,
-  ParsedMatrixSheet,
-  SocketCheckItem,
-  NetworkCheckStatus,
-  SavedMatrixSystem,
   MatrixViewGroup,
-} from "@/types/matrix"
+  ParsedMatrixSheet,
+  SavedMatrixSystem,
+  SocketCheckItem,
+} from '@/types/matrix';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000/api"
+const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:3000/api').replace(/\/$/, '');
 
-export type CheckerMode = "mock" | "zabbix"
-
-export interface RowCheckSummary {
-  status: NetworkCheckStatus
-  socketResults: SocketCheckItem[]
-  log: string
-  checkedAt?: string
-}
-
-async function extractBackendError(
-  res: Response,
-  fallbackMsg: string,
-): Promise<string> {
-  try {
-    const data = await res.json()
-    if (data?.message) {
-      return Array.isArray(data.message) ?
-          data.message.join("; ")
-        : String(data.message)
+async function handleApiResponse<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    let errorMessage = `HTTP ${res.status} (${res.statusText})`;
+    try {
+      const errBody = await res.json();
+      if (errBody?.message) {
+        errorMessage = Array.isArray(errBody.message)
+          ? errBody.message.join('; ')
+          : String(errBody.message);
+      }
+    } catch {
+      // Игнорируем ошибку парсинга JSON при нестандартном ответе
     }
-  } catch {
-    // ignore JSON parse error
+    throw new Error(errorMessage);
   }
-  return `${fallbackMsg} (HTTP ${res.status})`
+  return (await res.json()) as T;
 }
 
-function extractCleanHost(rawEndpoint: string): string {
-  let cleaned = rawEndpoint.trim()
+export async function fetchCatalogFromBackend(): Promise<SavedMatrixSystem[]> {
+  const res = await fetch(`${API_BASE}/catalog`);
+  return await handleApiResponse<SavedMatrixSystem[]>(res);
+}
+
+export async function saveSystemToBackend(
+  name: string,
+  sheets: ParsedMatrixSheet[]
+): Promise<SavedMatrixSystem> {
+  const res = await fetch(`${API_BASE}/catalog`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, sheets }),
+  });
+  return await handleApiResponse<SavedMatrixSystem>(res);
+}
+
+export async function deleteSystemFromBackend(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/catalog/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    await handleApiResponse(res);
+  }
+}
+
+export interface CheckRuleApiResponse {
+  status: 'accessible' | 'blocked' | 'untestable';
+  socketResults: SocketCheckItem[];
+  log: string;
+  checkedAt: string;
+}
+
+export async function checkRuleOnBackend(
+  row: DynamicMatrixRow
+): Promise<CheckRuleApiResponse> {
+  const res = await fetch(`${API_BASE}/checker/test-rule`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sources: row.meta.sources,
+      destinations: row.meta.destinations,
+      ports: row.meta.ports,
+    }),
+  });
+  return await handleApiResponse<CheckRuleApiResponse>(res);
+}
+
+function extractCleanHostPreview(rawEndpoint: string): string {
+  let cleaned = rawEndpoint.trim();
+
   if (/^https?:\/\//i.test(cleaned)) {
     try {
-      cleaned = new URL(cleaned).hostname
+      cleaned = new URL(cleaned).hostname;
     } catch {
       // ignore
     }
   }
-  const cidrMatch = cleaned.match(
-    /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d{1,3})\/\d{1,2}$/,
-  )
+
+  const cidrMatch = cleaned.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d{1,3})\/\d{1,2}$/);
   if (cidrMatch) {
-    const lastOctet = parseInt(cidrMatch[2], 10)
-    return `${cidrMatch[1]}.${lastOctet === 0 ? 1 : lastOctet}`
+    const lastOctet = parseInt(cidrMatch[2], 10);
+    return `${cidrMatch[1]}.${lastOctet === 0 ? 1 : lastOctet}`;
   }
-  if (cleaned.includes("/")) {
-    cleaned = cleaned.split("/")[0].trim()
+
+  if (cleaned.includes('/')) {
+    cleaned = cleaned.split('/')[0].trim();
   }
-  if (cleaned.includes("-")) {
-    const firstIp = cleaned.split("-")[0].trim()
+
+  if (cleaned.includes('-')) {
+    const firstIp = cleaned.split('-')[0].trim();
     if (/^\d{1,3}(\.\d{1,3}){3}$/.test(firstIp)) {
-      return firstIp
+      return firstIp;
     }
   }
-  return cleaned.replace(/\.$/, "")
+
+  return cleaned.replace(/\.$/, '');
 }
 
-function expandPortList(token: string): string[] {
-  const clean = token.replace(/^(tcp|udp)\//i, "").trim()
-  const rangeMatch = clean.match(/^(\d+)\s*[–-]\s*(\d+)$/)
+function expandPortTokenPreview(token: string): string[] {
+  const clean = token.replace(/^(tcp|udp)\//i, '').trim();
+  const rangeMatch = clean.match(/^(\d+)\s*[–-]\s*(\d+)$/);
   if (rangeMatch) {
-    const start = parseInt(rangeMatch[1], 10)
-    const end = parseInt(rangeMatch[2], 10)
-    const diff = end - start
-    if (diff > 0 && diff <= 5) {
-      return Array.from({ length: diff + 1 }, (_, i) => String(start + i))
+    const start = parseInt(rangeMatch[1], 10);
+    const end = parseInt(rangeMatch[2], 10);
+    if (start > end || start < 1 || end > 65535) return [];
+
+    const diff = end - start;
+    if (diff <= 20) {
+      return Array.from({ length: diff + 1 }, (_, i) => String(start + i));
     }
-    return [clean]
+
+    const mid = Math.floor((start + end) / 2);
+    return Array.from(new Set([String(start), String(mid), String(end)]));
   }
-  return /^\d+$/.test(clean) ? [clean] : []
+  return /^\d+$/.test(clean) ? [clean] : [];
 }
 
-export function buildAllSocketCombinations(
-  row: DynamicMatrixRow,
-): Omit<SocketCheckItem, "lastvalue" | "lastclock" | "status">[] {
-  const sources = row.meta.sources.length ? row.meta.sources : ["LocalHost"]
-  const destinations =
-    row.meta.destinations.length ? row.meta.destinations : ["Unknown"]
-  const combinations: Omit<
-    SocketCheckItem,
-    "lastvalue" | "lastclock" | "status"
-  >[] = []
+// Формирует предпросмотр всех связок (включая 3 контрольные точки для широких диапазонов портов)
+export function buildAllSocketCombinations(row: DynamicMatrixRow): SocketCheckItem[] {
+  const sources = row.meta.sources?.length ? row.meta.sources : ['LocalHost'];
+  const destinations = row.meta.destinations?.length ? row.meta.destinations : ['Unknown'];
+  const items: SocketCheckItem[] = [];
 
   for (const src of sources) {
     for (const dst of destinations) {
-      const cleanDest = extractCleanHost(dst)
-      for (const portGroup of row.meta.ports) {
-        for (const rawPortToken of portGroup.list) {
-          const expandedPorts = expandPortList(rawPortToken)
+      const cleanDest = extractCleanHostPreview(dst);
+
+      for (const portGroup of row.meta.ports || []) {
+        for (const rawPort of portGroup.list || []) {
+          const expandedPorts = expandPortTokenPreview(rawPort);
+
           for (const port of expandedPorts) {
             const zabbixKey =
-              portGroup.protocol === "UDP" ?
-                `custom.udp.check[${cleanDest},${port}]`
-              : `net.tcp.port[${cleanDest},${port}]`
+              portGroup.protocol === 'UDP'
+                ? `net.udp.port[${cleanDest},${port}]`
+                : `net.tcp.port[${cleanDest},${port}]`;
 
-            combinations.push({
+            items.push({
               id: `${src}->${dst}:${port}/${portGroup.protocol}`,
               source: src,
               destination: dst,
               port,
               protocol: portGroup.protocol,
               zabbixKey,
-            })
+              lastvalue: '0',
+              lastclock: 0,
+              status: 'blocked',
+            });
           }
         }
       }
     }
   }
 
-  return combinations
+  return items;
 }
 
-export async function checkRuleOnBackend(
-  row: DynamicMatrixRow,
-): Promise<RowCheckSummary> {
-  let response: Response
-  try {
-    response = await fetch(`${API_BASE_URL}/checker/test-rule`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sources: row.meta.sources,
-        destinations: row.meta.destinations,
-        ports: row.meta.ports,
-      }),
-    })
-  } catch {
-    throw new Error(
-      "Сервер бэкенда недоступен (проверьте, запущен ли NestJS на порту 3000)",
-    )
-  }
+function formatRowStatusForExcel(row: DynamicMatrixRow): string {
+  const testableSockets =
+    row.socketResults?.filter((s) => s.status !== 'untestable') || [];
+  const total = testableSockets.length;
+  const open = testableSockets.filter((s) => s.status === 'accessible').length;
+  const countSuffix = total > 0 ? ` (${open}/${total})` : '';
 
-  if (!response.ok) {
-    const errMsg = await extractBackendError(
-      response,
-      "Ошибка при проверке правила",
-    )
-    throw new Error(errMsg)
-  }
-
-  return await response.json()
-}
-
-export async function fetchCatalogFromBackend(): Promise<SavedMatrixSystem[]> {
-  let res: Response
-  try {
-    res = await fetch(`${API_BASE_URL}/catalog`)
-  } catch {
-    throw new Error(
-      "Не удалось подключиться к бэкенду (http://localhost:3000/api/catalog)",
-    )
-  }
-
-  if (!res.ok) {
-    const errMsg = await extractBackendError(
-      res,
-      "Ошибка загрузки каталога матриц",
-    )
-    throw new Error(errMsg)
-  }
-
-  const data = await res.json()
-  return Array.isArray(data) ? data : []
-}
-
-export async function saveSystemToBackend(
-  name: string,
-  sheets: ParsedMatrixSheet[],
-): Promise<SavedMatrixSystem> {
-  const cleanName = (name || "Матрица").trim()
-
-  let res: Response
-  try {
-    res = await fetch(`${API_BASE_URL}/catalog`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: cleanName, sheets }),
-    })
-  } catch {
-    throw new Error("Не удалось сохранить матрицу: сервер бэкенда недоступен")
-  }
-
-  if (!res.ok) {
-    const errMsg = await extractBackendError(
-      res,
-      "Ошибка при сохранении матрицы",
-    )
-    throw new Error(errMsg)
-  }
-
-  return await res.json()
-}
-
-export async function deleteSystemFromBackend(id: string): Promise<void> {
-  let res: Response
-  try {
-    res = await fetch(`${API_BASE_URL}/catalog/${id}`, { method: "DELETE" })
-  } catch {
-    throw new Error("Не удалось удалить матрицу: сервер бэкенда недоступен")
-  }
-
-  if (!res.ok) {
-    const errMsg = await extractBackendError(res, "Ошибка при удалении матрицы")
-    throw new Error(errMsg)
+  switch (row.checkStatus) {
+    case 'accessible':
+      return `Доступен${countSuffix}`;
+    case 'blocked':
+      return `Закрыт${countSuffix}`;
+    case 'error':
+      return `Ошибка API${row.errorMessage ? `: ${row.errorMessage}` : ''}`;
+    case 'untestable':
+      return `Недоступно${row.meta.untestableReason ? ` (${row.meta.untestableReason})` : ''}`;
+    case 'checking':
+      return 'Выполняется проверка';
+    default:
+      return 'Не проверялось';
   }
 }
 
-// Экспортирует отфильтрованную таблицу (все видимые группы и строки с учетом активных фильтров)
 export function exportFilteredGroupsToExcel(
   groups: MatrixViewGroup[],
-  fileNamePrefix = "Отчет_Матрица",
-) {
-  if (groups.length === 0) return
-
-  const wb = XLSX.utils.book_new()
-  const usedSheetNames = new Set<string>()
+  customFileName?: string
+): void {
+  const wb = XLSX.utils.book_new();
+  const usedSheetNames = new Set<string>();
 
   groups.forEach((group, idx) => {
-    const exportRows = group.rows.map((row) => {
-      const total = row.socketResults?.length || 0
-      const open =
-        row.socketResults?.filter((s) => s.status === "accessible").length || 0
+    const rawSheetName = `${group.systemName}_${group.sheetName}`
+      .replace(/[\\/?*[\]:]/g, '_')
+      .trim()
+      .slice(0, 28);
 
-      const obj: Record<string, any> = {
-        "Матрица (ИС)": row.__systemName || group.systemName,
-        "№": row.__rowNumber,
-        Раздел: row.__sectionTitle || "Основной",
-        "Статус доступности":
-          row.checkStatus === "accessible" ? `Доступен (${open}/${total})`
-          : row.checkStatus === "blocked" ? `Закрыт (0/${total})`
-          : row.checkStatus === "error" ?
-            `Ошибка (${row.errorMessage || "Сбой запроса"})`
-          : row.checkStatus === "untestable" ? "Недоступно для проверки"
-          : "Не проверен",
-        "Время проверки": row.lastCheckedAt || "—",
-      }
-
-      group.columns.forEach((col) => {
-        obj[col.headerTitle] = row.rawValues[col.key] ?? ""
-      })
-
-      return obj
-    })
-
-    const ws = XLSX.utils.json_to_sheet(exportRows)
-
-    let baseName =
-      groups.length > 1 ?
-        `${group.systemName}_${group.sheetName}`
-      : group.sheetName || "Матрица"
-    baseName = baseName.replace(/[\\/?*[\]:]/g, "_").slice(0, 28)
-    let finalSheetName = baseName || `Лист_${idx + 1}`
-    if (usedSheetNames.has(finalSheetName)) {
-      finalSheetName = `${baseName.slice(0, 25)}_${idx + 1}`
+    let safeSheetName = rawSheetName || `Sheet_${idx + 1}`;
+    let counter = 2;
+    while (usedSheetNames.has(safeSheetName)) {
+      safeSheetName = `${rawSheetName.slice(0, 25)}_${counter++}`;
     }
-    usedSheetNames.add(finalSheetName)
+    usedSheetNames.add(safeSheetName);
 
-    XLSX.utils.book_append_sheet(wb, ws, finalSheetName)
-  })
+    const headers = [
+      '№',
+      'Статус доступа',
+      ...group.columns.map((c) => c.headerTitle),
+      'Результат проверки сокетов',
+    ];
 
-  const safePrefix =
-    fileNamePrefix.replace(/[\\/?*[\]:]/g, "_").trim() || "Отчет"
-  XLSX.writeFile(
-    wb,
-    `${safePrefix}_${new Date().toISOString().slice(0, 10)}.xlsx`,
-  )
+    const dataRows = group.rows.map((row) => {
+      const socketSummary =
+        row.socketResults && row.socketResults.length > 0
+          ? row.socketResults
+              .map((s) => {
+                const stateLabel =
+                  s.status === 'accessible'
+                    ? 'OPEN (1)'
+                    : s.status === 'untestable'
+                    ? 'SKIPPED'
+                    : 'CLOSED (0)';
+                return `${s.protocol} ${s.destination}:${s.port} -> ${stateLabel}`;
+              })
+              .join('\n')
+          : '—';
+
+      return [
+        row.__rowNumber,
+        formatRowStatusForExcel(row),
+        ...group.columns.map((col) => String(row.rawValues[col.key] ?? '')),
+        socketSummary,
+      ];
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
+    ws['!cols'] = [
+      { wch: 6 },
+      { wch: 24 },
+      ...group.columns.map(() => ({ wch: 28 })),
+      { wch: 42 },
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, safeSheetName);
+  });
+
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  const fileName = customFileName || `access_matrix_export_${dateStamp}.xlsx`;
+  XLSX.writeFile(wb, fileName);
 }
