@@ -3,12 +3,18 @@ import {
   fetchCatalogFromBackend,
   saveSystemToBackend,
   deleteSystemFromBackend,
+  fetchFoldersFromBackend,
+  createFolderOnBackend,
+  updateFolderOnBackend,
+  deleteFolderOnBackend,
+  moveSystemOnBackend,
   checkRuleOnBackend,
 } from '@/services/networkTester';
 import { recomputeRowMeta, detectColumnSemanticRole } from '@/services/excelParser';
 import { useMatrixStore } from '@/store/useMatrixStore';
 import type {
   DynamicMatrixRow,
+  MatrixFolder,
   ParsedMatrixSheet,
   SavedMatrixSystem,
   DetectedColumn,
@@ -16,6 +22,7 @@ import type {
 } from '@/types/matrix';
 
 export const CATALOG_QUERY_KEY = ['matrix-catalog'] as const;
+export const FOLDERS_QUERY_KEY = ['matrix-folders'] as const;
 
 function resolveRowStatus(
   currentStatus: NetworkCheckStatus,
@@ -23,6 +30,119 @@ function resolveRowStatus(
 ): NetworkCheckStatus {
   if (!isTestable) return 'untestable';
   return currentStatus === 'untestable' ? 'idle' : currentStatus;
+}
+
+export function useFoldersQuery() {
+  return useQuery({
+    queryKey: FOLDERS_QUERY_KEY,
+    queryFn: fetchFoldersFromBackend,
+    retry: 1,
+  });
+}
+
+export function useCreateFolderMutation() {
+  const queryClient = useQueryClient();
+  const setUiError = useMatrixStore((s) => s.setUiError);
+  const setFolderExpanded = useMatrixStore((s) => s.setFolderExpanded);
+
+  return useMutation({
+    mutationFn: async ({ name, parentId }: { name: string; parentId?: string | null }) => {
+      setUiError(null);
+      return await createFolderOnBackend(name, parentId);
+    },
+    onSuccess: (newFolder: MatrixFolder) => {
+      queryClient.setQueryData<MatrixFolder[]>(FOLDERS_QUERY_KEY, (old = []) => [
+        ...old,
+        newFolder,
+      ]);
+      if (newFolder.parentId) {
+        setFolderExpanded(newFolder.parentId, true);
+      }
+    },
+    onError: (err: Error) => {
+      setUiError(err.message);
+    },
+  });
+}
+
+export function useUpdateFolderMutation() {
+  const queryClient = useQueryClient();
+  const setUiError = useMatrixStore((s) => s.setUiError);
+
+  return useMutation({
+    mutationFn: async ({
+      id,
+      name,
+      parentId,
+      order,
+    }: {
+      id: string;
+      name?: string;
+      parentId?: string | null;
+      order?: number;
+    }) => {
+      setUiError(null);
+      return await updateFolderOnBackend(id, { name, parentId, order });
+    },
+    onSuccess: (updatedFolder: MatrixFolder) => {
+      queryClient.setQueryData<MatrixFolder[]>(FOLDERS_QUERY_KEY, (old = []) =>
+        old.map((f) => (f.id === updatedFolder.id ? updatedFolder : f))
+      );
+    },
+    onError: (err: Error) => {
+      setUiError(err.message);
+    },
+  });
+}
+
+export function useDeleteFolderMutation() {
+  const queryClient = useQueryClient();
+  const setUiError = useMatrixStore((s) => s.setUiError);
+  const activeFolderId = useMatrixStore((s) => s.activeFolderId);
+  const setActiveFolderId = useMatrixStore((s) => s.setActiveFolderId);
+
+  return useMutation({
+    mutationFn: async ({ id, deleteContents }: { id: string; deleteContents?: boolean }) => {
+      setUiError(null);
+      return await deleteFolderOnBackend(id, deleteContents);
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: FOLDERS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: CATALOG_QUERY_KEY });
+      if (activeFolderId === variables.id) {
+        setActiveFolderId('ALL');
+      }
+    },
+    onError: (err: Error) => {
+      setUiError(err.message);
+    },
+  });
+}
+
+export function useMoveSystemMutation() {
+  const queryClient = useQueryClient();
+  const setUiError = useMatrixStore((s) => s.setUiError);
+
+  return useMutation({
+    mutationFn: async ({
+      systemId,
+      folderId,
+    }: {
+      systemId: string;
+      folderId: string | null;
+    }) => {
+      setUiError(null);
+      return await moveSystemOnBackend(systemId, folderId);
+    },
+    onSuccess: (updatedSys: SavedMatrixSystem) => {
+      queryClient.setQueryData<SavedMatrixSystem[]>(CATALOG_QUERY_KEY, (old = []) =>
+        old.map((s) => (s.id === updatedSys.id ? { ...s, folderId: updatedSys.folderId } : s))
+      );
+    },
+    onError: (err: Error) => {
+      setUiError(err.message);
+    },
+  });
 }
 
 export function useCatalogQuery() {
@@ -39,11 +159,21 @@ export function useSaveSystemMutation() {
   const clearDraft = useMatrixStore((s) => s.clearDraft);
   const setUiError = useMatrixStore((s) => s.setUiError);
   const setHasUnsavedChanges = useMatrixStore((s) => s.setHasUnsavedChanges);
+  const draftFolderId = useMatrixStore((s) => s.draftFolderId);
 
   return useMutation({
-    mutationFn: async ({ name, sheets }: { name: string; sheets: ParsedMatrixSheet[] }) => {
+    mutationFn: async ({
+      name,
+      sheets,
+      folderId,
+    }: {
+      name: string;
+      sheets: ParsedMatrixSheet[];
+      folderId?: string | null;
+    }) => {
       setUiError(null);
-      return await saveSystemToBackend(name, sheets);
+      const targetFolderId = folderId !== undefined ? folderId : draftFolderId;
+      return await saveSystemToBackend(name, sheets, targetFolderId);
     },
     onSuccess: (savedSystem: SavedMatrixSystem) => {
       queryClient.setQueryData<SavedMatrixSystem[]>(CATALOG_QUERY_KEY, (old = []) => {

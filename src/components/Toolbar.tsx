@@ -2,14 +2,17 @@ import React, { useRef, useState, useEffect } from 'react';
 import { useMatrixStore } from '@/store/useMatrixStore';
 import {
   useCatalogQuery,
+  useFoldersQuery,
   useSaveSystemMutation,
   useDeleteSystemMutation,
   useCheckBatchMutation,
 } from '@/hooks/useMatrixQueries';
 import { parseExcelMatrix } from '@/services/excelParser';
 import { exportFilteredGroupsToExcel } from '@/services/networkTester';
+import { getDescendantFolderIds, getFolderPath, getFolderBreadcrumbString } from '@/utils/folderTree';
 import type {
   SavedMatrixSystem,
+  MatrixFolder,
   ParsedMatrixSheet,
   MatrixViewGroup,
   DetectedColumn,
@@ -31,6 +34,9 @@ import {
   FilePlus2,
   Pencil,
   SlidersHorizontal,
+  PanelLeft,
+  ChevronRight,
+  Folder,
 } from 'lucide-react';
 
 export function formatMatrixTag(name: string): string {
@@ -49,6 +55,7 @@ export interface ColumnRuleToken {
     | 'protocol'
     | 'term'
     | 'index'
+    | 'folder'
     | 'custom'
     | 'text';
   customHeader?: string;
@@ -93,6 +100,10 @@ const ROLE_ALIASES: Record<string, ColumnRuleToken['target']> = {
   id: 'index',
   row: 'index',
   строка: 'index',
+
+  folder: 'folder',
+  dir: 'folder',
+  папка: 'folder',
 };
 
 function splitSearchTokens(rawQuery: string): string[] {
@@ -234,7 +245,8 @@ function matchRuleOnRow(
   rule: ColumnRuleToken,
   row: DynamicMatrixRow,
   sheet: ParsedMatrixSheet,
-  sysName: string
+  sysName: string,
+  folderName = ''
 ): boolean {
   const anyValueMatches = (check: (v: string) => boolean) => rule.values.some(check);
 
@@ -245,6 +257,10 @@ function matchRuleOnRow(
         .filter((c) => c.semanticRole === 'index')
         .map((c) => String(row.rawValues[c.key] ?? '').toLowerCase());
       return anyValueMatches((v) => rowNum === v || indexCols.some((c) => c.includes(v)));
+    }
+
+    case 'folder': {
+      return anyValueMatches((v) => folderName.toLowerCase().includes(v));
     }
 
     case 'source':
@@ -306,7 +322,8 @@ function matchRuleOnRow(
           .toLowerCase()
           .includes(v);
         const inSys = sysName.toLowerCase().includes(v);
-        return inValues || inSection || inSys;
+        const inFolder = folderName.toLowerCase().includes(v);
+        return inValues || inSection || inSys || inFolder;
       });
     }
   }
@@ -314,6 +331,8 @@ function matchRuleOnRow(
 
 export interface BuildGroupsParams {
   catalog: SavedMatrixSystem[];
+  folders?: MatrixFolder[];
+  activeFolderId?: string | null | 'ALL';
   activeSystemId: string;
   draftName: string;
   draftSheets: ParsedMatrixSheet[];
@@ -325,6 +344,8 @@ export interface BuildGroupsParams {
 
 export function buildVisibleMatrixGroups({
   catalog,
+  folders = [],
+  activeFolderId = 'ALL',
   activeSystemId,
   draftName,
   draftSheets,
@@ -335,13 +356,19 @@ export function buildVisibleMatrixGroups({
   const { matrixTags, textQuery, rules } = parseSearchInput(searchQuery);
   const isMultiMode = activeSystemId === 'ALL' || matrixTags.length > 0;
 
-  const filterRows = (sheet: ParsedMatrixSheet, sysName: string) =>
+  const getSystemFolderName = (sysFolderId: string | null | undefined): string => {
+    if (!sysFolderId) return '';
+    const f = folders.find((item) => item.id === sysFolderId);
+    return f ? f.name : '';
+  };
+
+  const filterRows = (sheet: ParsedMatrixSheet, sysName: string, folderName = '') =>
     sheet.rows.filter((row) => {
       if (statusFilter !== 'all' && row.checkStatus !== statusFilter) return false;
       if (rules.length === 0) return true;
 
       return rules.every((rule) => {
-        const matched = matchRuleOnRow(rule, row, sheet, sysName);
+        const matched = matchRuleOnRow(rule, row, sheet, sysName, folderName);
         return rule.negated ? !matched : matched;
       });
     });
@@ -353,6 +380,7 @@ export function buildVisibleMatrixGroups({
       return [
         {
           groupId: `draft_${sh.sheetName}`,
+          systemId: 'DRAFT',
           systemName: draftName || 'Новая матрица',
           sheetName: sh.sheetName,
           columns: sh.columns,
@@ -368,33 +396,48 @@ export function buildVisibleMatrixGroups({
     return [
       {
         groupId: `${sys.id}_${sh.sheetName}`,
+        systemId: sys.id,
+        folderId: sys.folderId,
         systemName: sys.name,
         sheetName: sh.sheetName,
         columns: sh.columns,
         portDictionary: sh.portDictionary,
-        rows: filterRows(sh, sys.name),
+        rows: filterRows(sh, sys.name, getSystemFolderName(sys.folderId)),
       },
     ];
   }
 
+  // Фильтрация по выбранной в сайдбаре папке
+  let baseCatalog = catalog;
+  if (activeFolderId === null) {
+    baseCatalog = catalog.filter((s) => !s.folderId);
+  } else if (activeFolderId && activeFolderId !== 'ALL') {
+    const descendantFolderIds = getDescendantFolderIds(folders, activeFolderId);
+    const targetFolderIds = new Set([activeFolderId, ...descendantFolderIds]);
+    baseCatalog = catalog.filter((s) => s.folderId && targetFolderIds.has(s.folderId));
+  }
+
   const targetSystems =
     matrixTags.length > 0
-      ? catalog.filter((sys) =>
+      ? baseCatalog.filter((sys) =>
           matrixTags.some(
             (tag) =>
               sys.name.toLowerCase().includes(tag) ||
               formatMatrixTag(sys.name).toLowerCase().includes(tag.replace(/\s+/g, '_'))
           )
         )
-      : catalog;
+      : baseCatalog;
 
   const groups: MatrixViewGroup[] = [];
   targetSystems.forEach((sys) => {
+    const folderName = getSystemFolderName(sys.folderId);
     sys.sheets.forEach((sh) => {
-      const matchingRows = filterRows(sh, sys.name);
+      const matchingRows = filterRows(sh, sys.name, folderName);
       if (matchingRows.length > 0 || (!textQuery && statusFilter === 'all')) {
         groups.push({
           groupId: `${sys.id}_${sh.sheetName}`,
+          systemId: sys.id,
+          folderId: sys.folderId,
           systemName: sys.name,
           sheetName: sh.sheetName,
           columns: sh.columns,
@@ -433,12 +476,19 @@ export const Toolbar: React.FC = () => {
   const [syntaxHelpOpen, setSyntaxHelpOpen] = useState(false);
 
   const { data: catalog = [] } = useCatalogQuery();
+  const { data: folders = [] } = useFoldersQuery();
   const saveMutation = useSaveSystemMutation();
   const deleteMutation = useDeleteSystemMutation();
   const batchCheckMutation = useCheckBatchMutation();
 
   const {
     activeSystemId,
+    activeFolderId,
+    isSidebarOpen,
+    toggleSidebar,
+    draftFolderId,
+    setDraftFolderId,
+    setActiveFolderId,
     draftName,
     draftSheets,
     activeSheetIndex,
@@ -468,6 +518,8 @@ export const Toolbar: React.FC = () => {
 
   const visibleGroups = buildVisibleMatrixGroups({
     catalog,
+    folders,
+    activeFolderId,
     activeSystemId,
     draftName,
     draftSheets,
@@ -548,12 +600,15 @@ export const Toolbar: React.FC = () => {
         : currentSystem?.name || 'Матрица';
     const targetSheets =
       activeSystemId === 'DRAFT' ? draftSheets : currentSystem?.sheets || [];
+    const targetFolderId =
+      activeSystemId === 'DRAFT' ? draftFolderId : currentSystem?.folderId;
 
     if (!targetSheets.length) return;
     try {
       await saveMutation.mutateAsync({
         name: targetName,
         sheets: targetSheets,
+        folderId: targetFolderId,
       });
       setJustSaved(true);
       setTimeout(() => setJustSaved(false), 2000);
@@ -651,19 +706,36 @@ export const Toolbar: React.FC = () => {
       <div className="flex flex-col xl:flex-row gap-3 items-center justify-between">
         {/* Левая часть: выбор матрицы, загрузка, создание с нуля, сохранение */}
         <div className="flex items-center gap-2 xl:w-auto flex-wrap">
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            className={`p-1.5 rounded-lg border transition ${
+              isSidebarOpen
+                ? 'bg-blue-600/20 text-blue-400 border-blue-500/40 hover:bg-blue-600/30'
+                : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200 border-zinc-700'
+            }`}
+            title={isSidebarOpen ? 'Скрыть боковую панель каталога' : 'Показать дерево папок'}
+          >
+            <PanelLeft className="w-4 h-4" />
+          </button>
+
           <div className="flex items-center gap-2 bg-zinc-950 px-3 py-1.5 rounded-lg border border-zinc-800">
             <Database className="w-4 h-4 text-blue-400 shrink-0" />
             <select
               value={activeSystemId}
               onChange={(e) => selectSystem(e.target.value)}
-              className="bg-zinc-950 text-xs font-medium text-zinc-200 focus:outline-none cursor-pointer"
+              className="bg-zinc-950 text-xs font-medium text-zinc-200 focus:outline-none cursor-pointer max-w-56 truncate"
             >
               <option value="ALL">Все матрицы ({catalog.length})</option>
-              {catalog.map((sys) => (
-                <option key={sys.id} value={sys.id}>
-                  {sys.name} ({sys.sheets.reduce((acc, s) => acc + s.rows.length, 0)})
-                </option>
-              ))}
+              {catalog.map((sys) => {
+                const folderName = folders.find((f) => f.id === sys.folderId)?.name;
+                return (
+                  <option key={sys.id} value={sys.id}>
+                    {folderName ? `[${folderName}] ` : ''}{sys.name} (
+                    {sys.sheets.reduce((acc, s) => acc + s.rows.length, 0)})
+                  </option>
+                );
+              })}
               {draftSheets.length > 0 && (
                 <option value="DRAFT">
                   Черновик: {draftName} ({draftSheets.reduce((acc, s) => acc + s.rows.length, 0)})
@@ -722,13 +794,28 @@ export const Toolbar: React.FC = () => {
             (draftSheets.length > 0 || currentSystem) && (
               <div className="flex items-center gap-1.5 bg-zinc-950 p-1 rounded-lg border border-blue-500/30">
                 {activeSystemId === 'DRAFT' && (
-                  <input
-                    type="text"
-                    value={draftName}
-                    onChange={(e) => setDraftName(e.target.value)}
-                    placeholder="Имя матрицы..."
-                    className="px-2.5 py-1 bg-transparent text-xs text-zinc-200 focus:outline-none w-36"
-                  />
+                  <>
+                    <input
+                      type="text"
+                      value={draftName}
+                      onChange={(e) => setDraftName(e.target.value)}
+                      placeholder="Имя матрицы..."
+                      className="px-2.5 py-1 bg-transparent text-xs text-zinc-200 focus:outline-none w-32"
+                    />
+                    <select
+                      value={draftFolderId || ''}
+                      onChange={(e) => setDraftFolderId(e.target.value || null)}
+                      className="px-2 py-1 bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-300 rounded focus:outline-none max-w-32 truncate"
+                      title="Папка для сохранения матрицы"
+                    >
+                      <option value="">📁 Корень</option>
+                      {folders.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          📁 {getFolderBreadcrumbString(folders, f.id)}
+                        </option>
+                      ))}
+                    </select>
+                  </>
                 )}
                 <button
                   disabled={saveMutation.isPending}
@@ -969,6 +1056,71 @@ export const Toolbar: React.FC = () => {
             </>
           )}
         </div>
+      </div>
+
+      {/* Хлебные крошки (Breadcrumbs) текущей навигации */}
+      <div className="flex items-center gap-1.5 text-xs text-zinc-400 pt-1.5 border-t border-zinc-800/60 overflow-x-auto">
+        <span className="text-zinc-500 font-medium shrink-0">Путь:</span>
+        <button
+          type="button"
+          onClick={() => {
+            setActiveFolderId('ALL');
+            selectSystem('ALL');
+          }}
+          className={`hover:text-blue-400 transition shrink-0 ${
+            activeFolderId === 'ALL' && activeSystemId === 'ALL'
+              ? 'text-blue-400 font-medium'
+              : ''
+          }`}
+        >
+          Все матрицы
+        </button>
+
+        {activeFolderId !== 'ALL' && (
+          <>
+            <ChevronRight className="w-3 h-3 text-zinc-600 shrink-0" />
+            {activeFolderId === null ? (
+              <span className="text-blue-400 font-medium shrink-0">Без папки (корень)</span>
+            ) : (
+              getFolderPath(folders, activeFolderId).map((f, idx, arr) => (
+                <React.Fragment key={f.id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveFolderId(f.id);
+                      if (activeSystemId !== 'ALL' && currentSystem?.folderId !== f.id) {
+                        selectSystem('ALL');
+                      }
+                    }}
+                    className={`hover:text-blue-400 transition flex items-center gap-1 shrink-0 ${
+                      idx === arr.length - 1 && activeSystemId === 'ALL'
+                        ? 'text-blue-400 font-medium'
+                        : ''
+                    }`}
+                  >
+                    <Folder className="w-3 h-3 text-amber-400" />
+                    <span>{f.name}</span>
+                  </button>
+                  {idx < arr.length - 1 && (
+                    <ChevronRight className="w-3 h-3 text-zinc-600 shrink-0" />
+                  )}
+                </React.Fragment>
+              ))
+            )}
+          </>
+        )}
+
+        {activeSystemId !== 'ALL' && (
+          <>
+            <ChevronRight className="w-3 h-3 text-zinc-600 shrink-0" />
+            <span className="text-zinc-100 font-semibold flex items-center gap-1 truncate">
+              <Database className="w-3 h-3 text-blue-400 shrink-0" />
+              <span className="truncate">
+                {activeSystemId === 'DRAFT' ? `Черновик: ${draftName}` : currentSystem?.name}
+              </span>
+            </span>
+          </>
+        )}
       </div>
 
       {uiError && (

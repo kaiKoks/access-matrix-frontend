@@ -76,16 +76,28 @@ export interface ParsedMatrixSheet {
   };
 }
 
+export interface MatrixFolder {
+  id: string;
+  name: string;
+  parentId: string | null;
+  order: number;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface SavedMatrixSystem {
   id: string;
   name: string;
+  folderId: string | null;
   updatedAt: string;
   sheets: ParsedMatrixSheet[];
 }
 
 export interface MatrixViewGroup {
   groupId: string;
+  systemId?: string;
   systemName: string;
+  folderId?: string | null;
   sheetName: string;
   columns: DetectedColumn[];
   portDictionary: Record<string, string>;

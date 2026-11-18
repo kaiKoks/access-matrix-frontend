@@ -20,6 +20,13 @@ export const EndpointCell: React.FC<{ value: any }> = ({ value }) => {
             key={i}
             className="inline-flex items-center gap-1.5 text-xs font-mono bg-zinc-900/90 border border-zinc-800 px-2 py-1 rounded w-fit max-w-full"
           >
+            {isUrl ? (
+              <Globe className="w-3 h-3 text-cyan-400 shrink-0" />
+            ) : isSubnet ? (
+              <Network className="w-3 h-3 text-amber-400 shrink-0" />
+            ) : (
+              <Server className="w-3 h-3 text-blue-400 shrink-0" />
+            )}
             <span className="truncate text-zinc-200" title={item}>
               {item}
             </span>

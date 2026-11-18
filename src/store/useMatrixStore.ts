@@ -21,6 +21,10 @@ function resolveRowStatus(
 
 interface MatrixUiState {
   activeSystemId: string;
+  activeFolderId: string | null | 'ALL';
+  isSidebarOpen: boolean;
+  expandedFolderIds: Record<string, boolean>;
+  draftFolderId: string | null;
   draftName: string;
   draftSheets: ParsedMatrixSheet[];
   activeSheetIndex: number;
@@ -32,8 +36,8 @@ interface MatrixUiState {
   hasUnsavedChanges: boolean;
   uiError: string | null;
 
-  setDraftMatrix: (fileName: string, sheets: ParsedMatrixSheet[]) => void;
-  createNewEmptyMatrix: (name?: string) => void;
+  setDraftMatrix: (fileName: string, sheets: ParsedMatrixSheet[], folderId?: string | null) => void;
+  createNewEmptyMatrix: (name?: string, folderId?: string | null) => void;
   updateDraftRow: (rowId: string, updater: (r: DynamicMatrixRow) => DynamicMatrixRow) => void;
   addDraftRow: (sheetName?: string, sectionTitle?: string) => void;
   deleteDraftRow: (rowId: string) => void;
@@ -41,8 +45,14 @@ interface MatrixUiState {
   deleteDraftColumn: (colKey: string) => void;
   renameDraftColumn: (colKey: string, newTitle: string) => void;
   setDraftName: (name: string) => void;
+  setDraftFolderId: (folderId: string | null) => void;
   clearDraft: () => void;
   selectSystem: (id: string) => void;
+  setActiveFolderId: (id: string | null | 'ALL') => void;
+  toggleSidebar: () => void;
+  setIsSidebarOpen: (isOpen: boolean) => void;
+  toggleFolderExpanded: (folderId: string) => void;
+  setFolderExpanded: (folderId: string, expanded: boolean) => void;
   setActiveSheetIndex: (idx: number) => void;
   setSelectedRowId: (id: string | null) => void;
   setSearchQuery: (query: string) => void;
@@ -55,6 +65,10 @@ interface MatrixUiState {
 
 export const useMatrixStore = create<MatrixUiState>((set) => ({
   activeSystemId: 'ALL',
+  activeFolderId: 'ALL',
+  isSidebarOpen: true,
+  expandedFolderIds: {},
+  draftFolderId: null,
   draftName: '',
   draftSheets: [],
   activeSheetIndex: 0,
@@ -66,7 +80,37 @@ export const useMatrixStore = create<MatrixUiState>((set) => ({
   hasUnsavedChanges: false,
   uiError: null,
 
-  setDraftMatrix: (fileName, sheets) => {
+  setActiveFolderId: (activeFolderId) =>
+    set({
+      activeFolderId,
+      // если переключаем папку, сбрасываем точечный выбор конкретной матрицы на ALL
+      activeSystemId: 'ALL',
+      selectedRowId: null,
+      activeSheetIndex: 0,
+    }),
+
+  toggleSidebar: () => set((state) => ({ isSidebarOpen: !state.isSidebarOpen })),
+  setIsSidebarOpen: (isSidebarOpen) => set({ isSidebarOpen }),
+
+  toggleFolderExpanded: (folderId) =>
+    set((state) => ({
+      expandedFolderIds: {
+        ...state.expandedFolderIds,
+        [folderId]: !state.expandedFolderIds[folderId],
+      },
+    })),
+
+  setFolderExpanded: (folderId, expanded) =>
+    set((state) => ({
+      expandedFolderIds: {
+        ...state.expandedFolderIds,
+        [folderId]: expanded,
+      },
+    })),
+
+  setDraftFolderId: (draftFolderId) => set({ draftFolderId }),
+
+  setDraftMatrix: (fileName, sheets, folderId) => {
     const cleanName =
       fileName
         .replace(/\.xlsx?$/i, '')
@@ -86,28 +130,40 @@ export const useMatrixStore = create<MatrixUiState>((set) => ({
         })),
       }));
 
-    set({
+    set((state) => ({
       draftName: cleanName,
       draftSheets: enriched,
+      draftFolderId:
+        folderId !== undefined
+          ? folderId
+          : state.activeFolderId !== 'ALL'
+          ? state.activeFolderId
+          : null,
       activeSystemId: 'DRAFT',
       activeSheetIndex: 0,
       selectedRowId: null,
       columnFilter: 'ALL',
       hasUnsavedChanges: true,
       uiError: null,
-    });
+    }));
   },
 
-  createNewEmptyMatrix: (name = 'Новая матрица') => {
+  createNewEmptyMatrix: (name = 'Новая матрица', folderId) => {
     const blankSheet = createBlankMatrixSheet('Основной');
     blankSheet.rows = blankSheet.rows.map((r): DynamicMatrixRow => ({
       ...r,
       __systemName: name,
     }));
 
-    set({
+    set((state) => ({
       draftName: name,
       draftSheets: [blankSheet],
+      draftFolderId:
+        folderId !== undefined
+          ? folderId
+          : state.activeFolderId !== 'ALL'
+          ? state.activeFolderId
+          : null,
       activeSystemId: 'DRAFT',
       activeSheetIndex: 0,
       selectedRowId: null,
@@ -115,7 +171,7 @@ export const useMatrixStore = create<MatrixUiState>((set) => ({
       isEditMode: true,
       hasUnsavedChanges: true,
       uiError: null,
-    });
+    }));
   },
 
   setDraftName: (draftName) =>
@@ -267,7 +323,8 @@ export const useMatrixStore = create<MatrixUiState>((set) => ({
       return { draftSheets: nextSheets, hasUnsavedChanges: true };
     }),
 
-  clearDraft: () => set({ draftName: '', draftSheets: [], hasUnsavedChanges: false }),
+  clearDraft: () =>
+    set({ draftName: '', draftSheets: [], draftFolderId: null, hasUnsavedChanges: false }),
 
   selectSystem: (id) =>
     set({

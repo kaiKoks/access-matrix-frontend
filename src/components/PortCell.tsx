@@ -8,7 +8,12 @@ interface PortCellProps {
   dictionary: Record<string, string>;
 }
 
-export const PortCell: React.FC<PortCellProps> = ({ value, isTcp, isUdp, dictionary }) => {
+export const PortCell: React.FC<PortCellProps> = ({
+  value,
+  isTcp: _isTcp,
+  isUdp: _isUdp,
+  dictionary,
+}) => {
   if (!value || String(value).trim() === '-') {
     return <span className="text-zinc-600">—</span>;
   }

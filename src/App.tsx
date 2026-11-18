@@ -1,6 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toolbar } from '@/components/Toolbar';
+import { MatrixSidebar } from '@/components/MatrixSidebar';
 import { MatrixTable } from '@/components/MatrixTable';
 import { RowDetailDrawer } from '@/components/RowDetailDrawer';
 
@@ -17,10 +18,13 @@ export const App: React.FC = () => {
   return (
     <QueryClientProvider client={queryClient}>
       <div className="h-screen overflow-hidden bg-zinc-950 text-zinc-100 flex flex-col font-sans selection:bg-blue-600 selection:text-white">
-        <main className="flex-1 flex flex-col overflow-hidden">
-          <Toolbar />
-          <MatrixTable />
-        </main>
+        <Toolbar />
+        <div className="flex-1 flex overflow-hidden">
+          <MatrixSidebar />
+          <main className="flex-1 flex flex-col overflow-hidden relative">
+            <MatrixTable />
+          </main>
+        </div>
         <RowDetailDrawer />
       </div>
     </QueryClientProvider>

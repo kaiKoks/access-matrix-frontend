@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import type {
   DynamicMatrixRow,
+  MatrixFolder,
   MatrixViewGroup,
   ParsedMatrixSheet,
   SavedMatrixSystem,
@@ -27,6 +28,58 @@ async function handleApiResponse<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
+export async function fetchFoldersFromBackend(): Promise<MatrixFolder[]> {
+  const res = await fetch(`${API_BASE}/catalog/folders`);
+  return await handleApiResponse<MatrixFolder[]>(res);
+}
+
+export async function createFolderOnBackend(
+  name: string,
+  parentId?: string | null
+): Promise<MatrixFolder> {
+  const res = await fetch(`${API_BASE}/catalog/folders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, parentId: parentId ?? null }),
+  });
+  return await handleApiResponse<MatrixFolder>(res);
+}
+
+export async function updateFolderOnBackend(
+  id: string,
+  data: { name?: string; parentId?: string | null; order?: number }
+): Promise<MatrixFolder> {
+  const res = await fetch(`${API_BASE}/catalog/folders/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return await handleApiResponse<MatrixFolder>(res);
+}
+
+export async function deleteFolderOnBackend(
+  id: string,
+  deleteContents = false
+): Promise<{ deleted: boolean; affectedMatrices: number }> {
+  const query = deleteContents ? '?deleteContents=true' : '';
+  const res = await fetch(`${API_BASE}/catalog/folders/${encodeURIComponent(id)}${query}`, {
+    method: 'DELETE',
+  });
+  return await handleApiResponse<{ deleted: boolean; affectedMatrices: number }>(res);
+}
+
+export async function moveSystemOnBackend(
+  systemId: string,
+  folderId: string | null
+): Promise<SavedMatrixSystem> {
+  const res = await fetch(`${API_BASE}/catalog/${encodeURIComponent(systemId)}/move`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderId: folderId ?? null }),
+  });
+  return await handleApiResponse<SavedMatrixSystem>(res);
+}
+
 export async function fetchCatalogFromBackend(): Promise<SavedMatrixSystem[]> {
   const res = await fetch(`${API_BASE}/catalog`);
   return await handleApiResponse<SavedMatrixSystem[]>(res);
@@ -34,12 +87,13 @@ export async function fetchCatalogFromBackend(): Promise<SavedMatrixSystem[]> {
 
 export async function saveSystemToBackend(
   name: string,
-  sheets: ParsedMatrixSheet[]
+  sheets: ParsedMatrixSheet[],
+  folderId?: string | null
 ): Promise<SavedMatrixSystem> {
   const res = await fetch(`${API_BASE}/catalog`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, sheets }),
+    body: JSON.stringify({ name, sheets, folderId }),
   });
   return await handleApiResponse<SavedMatrixSystem>(res);
 }

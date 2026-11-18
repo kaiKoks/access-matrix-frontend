@@ -2,25 +2,30 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useMatrixStore } from '@/store/useMatrixStore';
 import {
   useCatalogQuery,
+  useFoldersQuery,
   useCheckRowMutation,
   useMatrixEditorActions,
+  useMoveSystemMutation,
 } from '@/hooks/useMatrixQueries';
-import type { DetectedColumn, MatrixViewGroup } from '@/types/matrix';
+import type { DetectedColumn, MatrixViewGroup, SavedMatrixSystem } from '@/types/matrix';
 import { StatusBadge } from '@/components/StatusBadge';
 import { PortCell } from '@/components/PortCell';
 import { EndpointCell } from '@/components/EndpointCell';
 import { buildVisibleMatrixGroups } from '@/components/Toolbar';
+import { getFolderBreadcrumbString } from '@/utils/folderTree';
+import { MoveMatrixModal } from '@/components/MoveMatrixModal';
 import {
   Play,
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
   Database,
+  Folder,
+  FolderInput,
   AlertTriangle,
   RefreshCw,
   Plus,
   Trash2,
-  Hand,
   Check,
   X,
 } from 'lucide-react';
@@ -157,6 +162,7 @@ const GrabScrollTable: React.FC<{
         onScroll={handleTopScroll}
         className="overflow-x-auto overflow-y-hidden border-b border-zinc-800/80 bg-zinc-950/60"
       >
+        <div style={{ width: scrollWidth, height: 1 }} />
       </div>
 
       <div
@@ -184,7 +190,9 @@ export const MatrixTable: React.FC = () => {
     error,
     refetch,
   } = useCatalogQuery();
+  const { data: folders = [] } = useFoldersQuery();
   const checkRowMutation = useCheckRowMutation();
+  const moveSystemMutation = useMoveSystemMutation();
   const {
     updateCellValue,
     addRowToGroup,
@@ -196,6 +204,7 @@ export const MatrixTable: React.FC = () => {
 
   const {
     activeSystemId,
+    activeFolderId,
     draftName,
     draftSheets,
     activeSheetIndex,
@@ -210,6 +219,10 @@ export const MatrixTable: React.FC = () => {
   } = useMatrixStore();
 
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
+
+  // Состояние перемещения матрицы в папку
+  const [moveModalOpen, setMoveModalOpen] = useState(false);
+  const [matrixToMove, setMatrixToMove] = useState<SavedMatrixSystem | null>(null);
 
   // Состояние для превращения кнопки "+ Столбец" в поле ввода
   const [addingColGroupId, setAddingColGroupId] = useState<string | null>(null);
@@ -226,6 +239,8 @@ export const MatrixTable: React.FC = () => {
 
   const visibleGroups = buildVisibleMatrixGroups({
     catalog,
+    folders,
+    activeFolderId,
     activeSystemId,
     draftName,
     draftSheets,
@@ -346,13 +361,43 @@ export const MatrixTable: React.FC = () => {
           >
             {/* Чистая шапка карточки матрицы */}
             <div className="px-4 py-2.5 bg-zinc-900 border-b border-zinc-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
-              <div className="flex items-center gap-2">
-                <Database className="w-3.5 h-3.5 text-blue-400" />
+              <div className="flex items-center gap-2 flex-wrap">
+                <Database className="w-3.5 h-3.5 text-blue-400 shrink-0" />
                 <span className="text-xs font-semibold text-zinc-100">{group.systemName}</span>
                 <span className="text-xs text-zinc-500">/ {group.sheetName}</span>
-
+                {group.folderId ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                    <Folder className="w-3 h-3 text-amber-400" />
+                    <span>{getFolderBreadcrumbString(folders, group.folderId)}</span>
+                  </span>
+                ) : groupSystemId !== 'DRAFT' ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-zinc-800 text-zinc-400 border border-zinc-700/60">
+                    <span>Без папки</span>
+                  </span>
+                ) : null}
               </div>
 
+              {groupSystemId !== 'DRAFT' && (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const sys = catalog.find(
+                        (s) => s.id === groupSystemId || s.name === group.systemName
+                      );
+                      if (sys) {
+                        setMatrixToMove(sys);
+                        setMoveModalOpen(true);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 transition"
+                    title="Переместить в другую папку..."
+                  >
+                    <FolderInput className="w-3 h-3 text-emerald-400" />
+                    <span>В папку...</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             <GrabScrollTable
@@ -675,6 +720,21 @@ export const MatrixTable: React.FC = () => {
           </div>
         );
       })}
+
+      {matrixToMove && (
+        <MoveMatrixModal
+          isOpen={moveModalOpen}
+          onClose={() => {
+            setMoveModalOpen(false);
+            setMatrixToMove(null);
+          }}
+          matrix={matrixToMove}
+          folders={folders}
+          onMove={async (systemId, folderId) => {
+            await moveSystemMutation.mutateAsync({ systemId, folderId });
+          }}
+        />
+      )}
     </div>
   );
 };
