@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useMatrixStore } from '@/store/useMatrixStore';
 import { useCatalogQuery, useCheckRowMutation } from '@/hooks/useMatrixQueries';
 import { buildAllSocketCombinations } from '@/services/networkTester';
@@ -31,6 +31,17 @@ export const RowDetailDrawer: React.FC = () => {
   } = useMatrixStore();
 
   const [socketFilter, setSocketFilter] = useState<SocketFilterTab>('all');
+
+  useEffect(() => {
+    if (!selectedRowId) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSelectedRowId(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedRowId, setSelectedRowId]);
 
   const selectedRow: DynamicMatrixRow | null = useMemo(() => {
     if (!selectedRowId) return null;
