@@ -12,18 +12,15 @@ interface DeleteFolderModalProps {
   onConfirmDelete: (folderId: string, deleteContents: boolean) => Promise<void> | void;
 }
 
-export const DeleteFolderModal: React.FC<DeleteFolderModalProps> = ({
-  isOpen,
-  onClose,
-  folder,
-  folders,
-  catalog,
-  onConfirmDelete,
-}) => {
+const DeleteFolderDialog: React.FC<{
+  onClose: () => void;
+  folder: MatrixFolder;
+  folders: MatrixFolder[];
+  catalog: SavedMatrixSystem[];
+  onConfirmDelete: (folderId: string, deleteContents: boolean) => Promise<void> | void;
+}> = ({ onClose, folder, folders, catalog, onConfirmDelete }) => {
   const [deleteContents, setDeleteContents] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-
-  if (!isOpen || !folder) return null;
 
   const descendantFolderIds = getDescendantFolderIds(folders, folder.id);
   const allFolderIds = [folder.id, ...descendantFolderIds];
@@ -82,10 +79,18 @@ export const DeleteFolderModal: React.FC<DeleteFolderModalProps> = ({
                 В этой папке содержится:
                 <ul className="list-disc list-inside mt-1 space-y-0.5 text-zinc-300">
                   {affectedMatricesCount > 0 && (
-                    <li>Матриц доступа: <span className="font-semibold text-amber-200">{affectedMatricesCount}</span></li>
+                    <li>
+                      Матриц доступа:{' '}
+                      <span className="font-semibold text-amber-200">{affectedMatricesCount}</span>
+                    </li>
                   )}
                   {descendantFolderIds.length > 0 && (
-                    <li>Вложенных подпапок: <span className="font-semibold text-amber-200">{descendantFolderIds.length}</span></li>
+                    <li>
+                      Вложенных подпапок:{' '}
+                      <span className="font-semibold text-amber-200">
+                        {descendantFolderIds.length}
+                      </span>
+                    </li>
                   )}
                 </ul>
               </div>
@@ -134,7 +139,8 @@ export const DeleteFolderModal: React.FC<DeleteFolderModalProps> = ({
           </div>
         ) : (
           <p className="text-xs text-zinc-300">
-            Вы уверены, что хотите удалить пустую папку «<span className="text-zinc-100 font-medium">{folder.name}</span>»?
+            Вы уверены, что хотите удалить пустую папку «
+            <span className="text-zinc-100 font-medium">{folder.name}</span>»?
           </p>
         )}
 
@@ -157,5 +163,25 @@ export const DeleteFolderModal: React.FC<DeleteFolderModalProps> = ({
         </div>
       </div>
     </div>
+  );
+};
+
+export const DeleteFolderModal: React.FC<DeleteFolderModalProps> = ({
+  isOpen,
+  onClose,
+  folder,
+  folders,
+  catalog,
+  onConfirmDelete,
+}) => {
+  if (!isOpen || !folder) return null;
+  return (
+    <DeleteFolderDialog
+      onClose={onClose}
+      folder={folder}
+      folders={folders}
+      catalog={catalog}
+      onConfirmDelete={onConfirmDelete}
+    />
   );
 };

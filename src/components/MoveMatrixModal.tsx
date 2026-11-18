@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import type { MatrixFolder, SavedMatrixSystem } from '@/types/matrix';
 import { getFolderBreadcrumbString } from '@/utils/folderTree';
 import { FolderInput, Database, X } from 'lucide-react';
@@ -11,26 +11,17 @@ interface MoveMatrixModalProps {
   onMove: (systemId: string, folderId: string | null) => Promise<void> | void;
 }
 
-export const MoveMatrixModal: React.FC<MoveMatrixModalProps> = ({
-  isOpen,
-  onClose,
-  matrix,
-  folders,
-  onMove,
-}) => {
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+const MoveMatrixDialog: React.FC<{
+  onClose: () => void;
+  matrix: SavedMatrixSystem;
+  folders: MatrixFolder[];
+  onMove: (systemId: string, folderId: string | null) => Promise<void> | void;
+}> = ({ onClose, matrix, folders, onMove }) => {
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(matrix.folderId ?? null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  useEffect(() => {
-    if (isOpen && matrix) {
-      setSelectedFolderId(matrix.folderId ?? null);
-      setIsSubmitting(false);
-    }
-  }, [isOpen, matrix]);
-
-  if (!isOpen || !matrix) return null;
-
-  const currentFolderStr = getFolderBreadcrumbString(folders, matrix.folderId) || 'Корень (без папки)';
+  const currentFolderStr =
+    getFolderBreadcrumbString(folders, matrix.folderId) || 'Корень (без папки)';
 
   const handleConfirm = async () => {
     if (isSubmitting) return;
@@ -138,4 +129,15 @@ export const MoveMatrixModal: React.FC<MoveMatrixModalProps> = ({
       </div>
     </div>
   );
+};
+
+export const MoveMatrixModal: React.FC<MoveMatrixModalProps> = ({
+  isOpen,
+  onClose,
+  matrix,
+  folders,
+  onMove,
+}) => {
+  if (!isOpen || !matrix) return null;
+  return <MoveMatrixDialog onClose={onClose} matrix={matrix} folders={folders} onMove={onMove} />;
 };

@@ -11,7 +11,7 @@ import type { DetectedColumn, MatrixViewGroup, SavedMatrixSystem } from '@/types
 import { StatusBadge } from '@/components/StatusBadge';
 import { PortCell } from '@/components/PortCell';
 import { EndpointCell } from '@/components/EndpointCell';
-import { buildVisibleMatrixGroups } from '@/components/Toolbar';
+import { buildVisibleMatrixGroups } from '@/utils/matrixFilter';
 import { getFolderBreadcrumbString } from '@/utils/folderTree';
 import { MoveMatrixModal } from '@/components/MoveMatrixModal';
 import {

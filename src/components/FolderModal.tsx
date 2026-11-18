@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import type { MatrixFolder } from '@/types/matrix';
 import { getDescendantFolderIds, getFolderBreadcrumbString } from '@/utils/folderTree';
 import { Folder, FolderPlus, X } from 'lucide-react';
@@ -12,33 +12,19 @@ interface FolderModalProps {
   onSubmit: (data: { name: string; parentId: string | null }) => Promise<void> | void;
 }
 
-export const FolderModal: React.FC<FolderModalProps> = ({
-  isOpen,
-  onClose,
-  initialFolder,
-  defaultParentId,
-  folders,
-  onSubmit,
-}) => {
+const FolderModalDialog: React.FC<{
+  onClose: () => void;
+  initialFolder?: MatrixFolder | null;
+  defaultParentId?: string | null;
+  folders: MatrixFolder[];
+  onSubmit: (data: { name: string; parentId: string | null }) => Promise<void> | void;
+}> = ({ onClose, initialFolder, defaultParentId, folders, onSubmit }) => {
   const isEditing = Boolean(initialFolder);
-  const [name, setName] = useState('');
-  const [parentId, setParentId] = useState<string | null>(null);
+  const [name, setName] = useState(initialFolder?.name ?? '');
+  const [parentId, setParentId] = useState<string | null>(
+    initialFolder ? initialFolder.parentId : (defaultParentId ?? null)
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  useEffect(() => {
-    if (isOpen) {
-      if (initialFolder) {
-        setName(initialFolder.name);
-        setParentId(initialFolder.parentId);
-      } else {
-        setName('');
-        setParentId(defaultParentId ?? null);
-      }
-      setIsSubmitting(false);
-    }
-  }, [isOpen, initialFolder, defaultParentId]);
-
-  if (!isOpen) return null;
 
   // Нельзя выбирать родителем саму себя или своих потомков
   const invalidParentIds = new Set<string>();
@@ -152,5 +138,25 @@ export const FolderModal: React.FC<FolderModalProps> = ({
         </form>
       </div>
     </div>
+  );
+};
+
+export const FolderModal: React.FC<FolderModalProps> = ({
+  isOpen,
+  onClose,
+  initialFolder,
+  defaultParentId,
+  folders,
+  onSubmit,
+}) => {
+  if (!isOpen) return null;
+  return (
+    <FolderModalDialog
+      onClose={onClose}
+      initialFolder={initialFolder}
+      defaultParentId={defaultParentId}
+      folders={folders}
+      onSubmit={onSubmit}
+    />
   );
 };
